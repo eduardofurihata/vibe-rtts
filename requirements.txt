@@ -1,0 +1,7 @@
+# vibe-rtts runs in the vibe-whisper-transcriber venv which already has:
+# - PySide6-Essentials
+# - faster-whisper
+# - torch (for CUDA)
+#
+# No additional packages needed.
+# Run with: scripts/vibe-rtts.sh
