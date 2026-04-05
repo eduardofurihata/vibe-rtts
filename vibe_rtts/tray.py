@@ -55,6 +55,9 @@ class TrayManager(QSystemTrayIcon):
         self.setContextMenu(self._menu)
         self._update_state(AppState.INACTIVE)
 
+        # Double-click on tray icon triggers toggle
+        self.activated.connect(self._on_activated)
+
         # Components (set by app after init)
         self.daemon_manager = None
         self.recorder = None
@@ -125,7 +128,12 @@ class TrayManager(QSystemTrayIcon):
         icon_key = "recording_pulse" if self._pulse_on else "recording"
         self.setIcon(self._icons[icon_key])
 
-    # --- Toggle (shortcut or could be menu in future) ---
+    @Slot(QSystemTrayIcon.ActivationReason)
+    def _on_activated(self, reason):
+        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
+            self._on_toggle()
+
+    # --- Toggle (shortcut or double-click) ---
     @Slot()
     def _on_toggle(self):
         print(f"[TRAY] Toggle pressed! Current state: {self._state.name}", flush=True)
