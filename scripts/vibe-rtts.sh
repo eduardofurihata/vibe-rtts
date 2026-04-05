@@ -1,6 +1,6 @@
 #!/bin/bash
 # Launcher for vibe-rtts: sets CUDA library paths and runs the app
-SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 VENV="$HOME/GitHub/vibe-whisper-transcriber/.venv"
 
 # Build LD_LIBRARY_PATH from nvidia libs in venv
