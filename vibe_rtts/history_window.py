@@ -4,9 +4,52 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
     QPushButton, QLabel, QLineEdit,
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 
 from vibe_rtts.history import HistoryStore
+
+
+class HistoryItemWidget(QWidget):
+    """Custom widget for each history row: timestamp + text + Copy button."""
+
+    def __init__(self, item: dict, parent=None):
+        super().__init__(parent)
+        self._text = item["text"]
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(4, 2, 4, 2)
+
+        # Left side: timestamp + text
+        left = QVBoxLayout()
+        left.setSpacing(0)
+
+        ts = item["timestamp"][:16].replace("T", "  ")
+        lang = f" [{item['language']}]" if item.get("language") else ""
+        header = QLabel(f"<span style='color: grey; font-size: 11px;'>{ts}{lang}</span>")
+        left.addWidget(header)
+
+        preview = item["text"][:150].replace("\n", " ")
+        text_label = QLabel(preview)
+        text_label.setWordWrap(True)
+        text_label.setToolTip(item["text"])
+        left.addWidget(text_label)
+
+        layout.addLayout(left, stretch=1)
+
+        # Right side: Copy button
+        copy_btn = QPushButton("Copy")
+        copy_btn.setFixedWidth(60)
+        copy_btn.clicked.connect(self._on_copy)
+        layout.addWidget(copy_btn)
+
+    def _on_copy(self):
+        subprocess.Popen(
+            ["wl-copy", self._text],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        sender = self.sender()
+        sender.setText("Copied!")
+        QTimer.singleShot(1500, lambda: sender.setText("Copy"))
 
 
 class HistoryWindow(QWidget):
@@ -15,7 +58,7 @@ class HistoryWindow(QWidget):
         self.store = history_store
 
         self.setWindowTitle("Vibe RTTS — History")
-        self.setMinimumSize(500, 400)
+        self.setMinimumSize(550, 450)
         self.setWindowFlags(Qt.WindowType.Window)
 
         layout = QVBoxLayout(self)
@@ -29,7 +72,6 @@ class HistoryWindow(QWidget):
         # List
         self._list = QListWidget()
         self._list.setAlternatingRowColors(True)
-        self._list.itemClicked.connect(self._on_item_clicked)
         layout.addWidget(self._list)
 
         # Bottom bar
@@ -42,7 +84,7 @@ class HistoryWindow(QWidget):
         bottom.addWidget(self._count_label)
         layout.addLayout(bottom)
 
-        self._items = []  # Cache of all history items
+        self._items = []
 
     def refresh(self):
         self._items = self.store.get_all()
@@ -51,15 +93,11 @@ class HistoryWindow(QWidget):
     def _render_items(self, items: list[dict]):
         self._list.clear()
         for item in items:
-            ts = item["timestamp"][:16].replace("T", "  ")
-            lang = f"[{item['language']}]" if item.get("language") else ""
-            text_preview = item["text"][:100].replace("\n", " ")
-            display = f"{ts}  {lang}  {text_preview}"
-
-            widget_item = QListWidgetItem(display)
-            widget_item.setData(Qt.ItemDataRole.UserRole, item)
-            widget_item.setToolTip(item["text"])
-            self._list.addItem(widget_item)
+            widget = HistoryItemWidget(item)
+            list_item = QListWidgetItem()
+            list_item.setSizeHint(widget.sizeHint())
+            self._list.addItem(list_item)
+            self._list.setItemWidget(list_item, widget)
 
         self._count_label.setText(f"{len(items)} items")
 
@@ -72,18 +110,6 @@ class HistoryWindow(QWidget):
             if text.lower() in item["text"].lower()
         ]
         self._render_items(filtered)
-
-    def _on_item_clicked(self, item: QListWidgetItem):
-        data = item.data(Qt.ItemDataRole.UserRole)
-        if data:
-            subprocess.Popen(
-                ["wl-copy", data["text"]],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
-            self.setWindowTitle("Vibe RTTS — Copied!")
-            # Reset title after 2 seconds
-            from PySide6.QtCore import QTimer
-            QTimer.singleShot(2000, lambda: self.setWindowTitle("Vibe RTTS — History"))
 
     def _on_clear(self):
         self.store.clear_all()
