@@ -55,7 +55,12 @@ class TrayManager(QSystemTrayIcon):
         self.setContextMenu(self._menu)
         self._update_state(AppState.INACTIVE)
 
-        # Double-click on tray icon triggers toggle
+        # Double-click detection (SNI on Wayland sends Trigger, not DoubleClick)
+        self._click_timer = QTimer()
+        self._click_timer.setSingleShot(True)
+        self._click_timer.setInterval(400)
+        self._click_count = 0
+        self._click_timer.timeout.connect(self._on_click_timeout)
         self.activated.connect(self._on_activated)
 
         # Components (set by app after init)
@@ -130,8 +135,19 @@ class TrayManager(QSystemTrayIcon):
 
     @Slot(QSystemTrayIcon.ActivationReason)
     def _on_activated(self, reason):
-        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
-            self._on_toggle()
+        if reason in (QSystemTrayIcon.ActivationReason.Trigger,
+                      QSystemTrayIcon.ActivationReason.DoubleClick):
+            self._click_count += 1
+            if self._click_count == 1:
+                self._click_timer.start()
+            elif self._click_count >= 2:
+                self._click_timer.stop()
+                self._click_count = 0
+                self._on_toggle()
+
+    @Slot()
+    def _on_click_timeout(self):
+        self._click_count = 0
 
     # --- Toggle (shortcut or double-click) ---
     @Slot()

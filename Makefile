@@ -1,4 +1,4 @@
-.PHONY: run dev install uninstall
+.PHONY: run dev test install uninstall
 
 VENV := $(HOME)/GitHub/vibe-whisper-transcriber/.venv
 SCRIPT := $(CURDIR)/scripts/vibe-rtts.sh
@@ -14,6 +14,9 @@ dev:
 	@printf '[Desktop Entry]\nType=Application\nName=Vibe RTTS\nComment=Voice-to-text with AI transcription\nExec=$(SCRIPT)\nIcon=$(ICON)\nCategories=Utility;Audio;\nKeywords=voice;transcription;whisper;speech;\nTerminal=false\nStartupNotify=false\n' > $(DESKTOP_FILE)
 	@echo "Desktop shortcut created: $(DESKTOP_FILE)"
 	@$(SCRIPT)
+
+test:
+	@PYTHONPATH=$(CURDIR) $(VENV)/bin/python -m pytest tests/ -v
 
 install:
 	@ln -sf $(SCRIPT) $(HOME)/bin/vibe-rtts
