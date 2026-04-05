@@ -7,5 +7,5 @@ VENV="$HOME/GitHub/vibe-whisper-transcriber/.venv"
 NVIDIA_LIBS=$(find "$VENV" -path "*/nvidia/*/lib" -type d 2>/dev/null | tr '\n' ':')
 export LD_LIBRARY_PATH="${NVIDIA_LIBS%:}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
-cd "$SCRIPT_DIR"
+export PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}"
 exec "$VENV/bin/python" -m vibe_rtts "$@"

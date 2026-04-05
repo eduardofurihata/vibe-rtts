@@ -82,6 +82,7 @@ class TrayManager(QSystemTrayIcon):
         self.shortcut_handler.shortcut_activated.connect(self._on_toggle)
 
     def _update_state(self, new_state: AppState):
+        print(f"[TRAY] State: {self._state.name} → {new_state.name}", flush=True)
         self._state = new_state
 
         if new_state == AppState.INACTIVE:
@@ -127,6 +128,7 @@ class TrayManager(QSystemTrayIcon):
     # --- Toggle (shortcut or could be menu in future) ---
     @Slot()
     def _on_toggle(self):
+        print(f"[TRAY] Toggle pressed! Current state: {self._state.name}", flush=True)
         if self._state == AppState.INACTIVE:
             # Start daemon then record
             self._update_state(AppState.LOADING)
