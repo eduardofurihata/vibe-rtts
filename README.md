@@ -7,7 +7,8 @@ the result to your clipboard.
 ## How It Works
 
 - A **system tray icon** shows the current state (inactive/ready/recording/transcribing)
-- Press **Meta+Shift+V** or **double-click the tray icon** to toggle recording
+- Press **Ctrl+Alt+Space**, **Numpad -**, or **double-click the tray icon** to toggle recording
+- Press **Numpad +** to paste the last transcription into the focused window
 - Audio is recorded via PulseAudio/PipeWire, transcribed by a local Whisper
   model running on CUDA, and copied to the Wayland clipboard
 - Transcription history is stored locally in SQLite

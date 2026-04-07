@@ -24,11 +24,23 @@ DAEMON_MODEL = "large-v3"
 DAEMON_DEVICE = "cuda"
 DAEMON_COMPUTE_TYPE = "int8"
 
-# Shortcut
+# Shortcuts
 SHORTCUT_COMPONENT = "vibe-rtts"
-SHORTCUT_ACTION = "voice-toggle"
-# Meta+Shift+V: Qt::META(0x10000000) | Qt::SHIFT(0x02000000) | Qt::Key_V(0x56)
-SHORTCUT_KEY_CODE = 0x12000056
+
+# Toggle recording: Ctrl+Alt+Space  OR  Numpad -
+SHORTCUT_TOGGLE_ACTION = "voice-toggle"
+SHORTCUT_TOGGLE_KEYS = [
+    0x0C000020,  # Ctrl(0x04000000) | Alt(0x08000000) | Space(0x20)
+    0x2000002D,  # Keypad(0x20000000) | Minus(0x2d)
+]
+SHORTCUT_TOGGLE_DISPLAY = "Ctrl+Alt+Space / Numpad -"
+
+# Paste last transcription: Numpad +
+SHORTCUT_PASTE_ACTION = "paste-last"
+SHORTCUT_PASTE_KEYS = [
+    0x2000002B,  # Keypad(0x20000000) | Plus(0x2b)
+]
+SHORTCUT_PASTE_DISPLAY = "Numpad +"
 
 
 def get_nvidia_ld_path() -> str:

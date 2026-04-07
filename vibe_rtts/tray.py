@@ -88,6 +88,23 @@ class TrayManager(QSystemTrayIcon):
         self.daemon_manager.engine_error.connect(self._on_engine_error)
         self.recorder.recording_stopped.connect(self._on_recording_stopped)
         self.shortcut_handler.shortcut_activated.connect(self._on_toggle)
+        self.shortcut_handler.paste_activated.connect(self._on_paste)
+
+    # --- Paste (Numpad +) ---
+    @Slot()
+    def _on_paste(self):
+        """Simulate Ctrl+V via ydotool to paste clipboard into focused window."""
+        import subprocess
+        print("[TRAY] Paste shortcut fired", flush=True)
+        # ydotool uses raw Linux scancodes: KEY_LEFTCTRL=29, KEY_LEFTSHIFT=42, KEY_V=47
+        # Sequence: Ctrl down, Shift down, V down, V up, Shift up, Ctrl up.
+        # Small delay lets the Numpad+ key release before we inject Ctrl+Shift+V.
+        subprocess.Popen(
+            "sleep 0.1 && ydotool key 29:1 42:1 47:1 47:0 42:0 29:0",
+            shell=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
 
     def _update_state(self, new_state: AppState):
         print(f"[TRAY] State: {self._state.name} → {new_state.name}", flush=True)
@@ -248,5 +265,7 @@ class TrayManager(QSystemTrayIcon):
             self.recorder.stop_recording()
         if self._state in (AppState.READY, AppState.LOADING, AppState.TRANSCRIBING):
             self.daemon_manager.stop()
+        if self.shortcut_handler:
+            self.shortcut_handler.cleanup()
         from PySide6.QtWidgets import QApplication
         QApplication.quit()

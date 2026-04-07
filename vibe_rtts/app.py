@@ -1,4 +1,5 @@
 import atexit
+import signal
 import sys
 
 from PySide6.QtWidgets import QApplication
@@ -46,12 +47,28 @@ def main():
     )
     tray.show()
 
-    # Cleanup on exit
+    # Cleanup: unregister shortcuts so numpad keys return to normal.
+    # Must run on normal exit, tray Quit, SIGTERM, and SIGINT.
+    _cleaned = False
+
     def cleanup():
+        nonlocal _cleaned
+        if _cleaned:
+            return
+        _cleaned = True
         shortcut_handler.cleanup()
         if daemon_manager.is_running():
             daemon_manager.stop()
 
     atexit.register(cleanup)
+    app.aboutToQuit.connect(cleanup)
+
+    # SIGTERM/SIGINT: run cleanup then exit (atexit won't fire on raw signals)
+    def _signal_handler(signum, frame):
+        cleanup()
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, _signal_handler)
+    signal.signal(signal.SIGINT, _signal_handler)
 
     sys.exit(app.exec())

@@ -4,6 +4,9 @@ from PySide6.QtCore import QThread, Signal
 
 from vibe_rtts.config import SOCKET_PATH
 
+# 2 hours — supports long meetings / audio files
+_TRANSCRIBE_TIMEOUT = 2 * 60 * 60
+
 
 class TranscribeWorker(QThread):
     finished = Signal(str, str)  # text, language
@@ -16,7 +19,7 @@ class TranscribeWorker(QThread):
     def run(self):
         try:
             sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            sock.settimeout(30)
+            sock.settimeout(_TRANSCRIBE_TIMEOUT)
             sock.connect(str(SOCKET_PATH))
             sock.sendall(self.wav_path.encode() + b"\n")
 
@@ -53,6 +56,6 @@ class TranscribeWorker(QThread):
                 self.error.emit("No speech detected")
 
         except socket.timeout:
-            self.error.emit("Transcription timed out (30s)")
+            self.error.emit("Transcription timed out")
         except Exception as e:
             self.error.emit(str(e))
