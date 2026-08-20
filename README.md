@@ -7,11 +7,16 @@ the result to your clipboard.
 ## How It Works
 
 - A **system tray icon** shows the current state (inactive/ready/recording/transcribing)
+- On launch the model is **preloaded**, so the app opens straight in READY — no
+  first click to warm it up. "Stop Engine" in the tray menu frees the GPU memory
 - Press **Ctrl+Alt+Space**, **Numpad -**, or **double-click the tray icon** to toggle recording
 - Press **Numpad +** to paste the last transcription into the focused window
 - Audio is recorded via PulseAudio/PipeWire, transcribed by a local Whisper
   model running on CUDA, and copied to the Wayland clipboard
 - Transcription history is stored locally in SQLite
+- The GPU is mandatory: `large-v3` on CPU is too slow to be usable, so the daemon
+  refuses to start rather than silently falling back (pass `--allow-cpu-fallback`
+  to the daemon if you really want it)
 
 ## Requirements
 
@@ -37,6 +42,9 @@ make install
 
 # Remove shortcut and ~/bin link
 make uninstall
+
+# Open without preloading the model (leaves the VRAM free for another job)
+VIBE_RTTS_AUTOSTART_ENGINE=0 vibe-rtts
 ```
 
 ## Project Structure

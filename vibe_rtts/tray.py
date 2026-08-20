@@ -103,7 +103,6 @@ class TrayManager(QSystemTrayIcon):
             "sleep 0.1 && ydotool key 29:1 42:1 47:1 47:0 42:0 29:0",
             shell=True,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
         )
 
     def _update_state(self, new_state: AppState):
@@ -126,7 +125,9 @@ class TrayManager(QSystemTrayIcon):
 
         elif new_state == AppState.READY:
             self.setIcon(self._icons["active"])
-            self.setToolTip(f"{APP_DISPLAY_NAME} — Ready")
+            device = getattr(self.daemon_manager, "device", None)
+            suffix = " (CPU — slow)" if device == "cpu" else ""
+            self.setToolTip(f"{APP_DISPLAY_NAME} — Ready{suffix}")
             self._engine_action.setText("Stop Engine")
             self._engine_action.setEnabled(True)
             self._pulse_timer.stop()
@@ -205,7 +206,7 @@ class TrayManager(QSystemTrayIcon):
     @Slot(str)
     def _on_engine_error(self, error_msg):
         self.showMessage("Vibe RTTS", f"Engine error: {error_msg}",
-                         QSystemTrayIcon.MessageIcon.Critical, 5000)
+                         QSystemTrayIcon.MessageIcon.Warning, 5000)
         self._update_state(AppState.INACTIVE)
 
     # --- Recording events ---
@@ -222,8 +223,7 @@ class TrayManager(QSystemTrayIcon):
     def _on_transcription_done(self, text, language):
         import subprocess
         # Copy to clipboard
-        subprocess.Popen(["wl-copy", text],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.Popen(["wl-copy", text], stdout=subprocess.DEVNULL)
         # Save to history
         if self.history_store:
             self.history_store.save(text, language)
@@ -237,17 +237,26 @@ class TrayManager(QSystemTrayIcon):
     @Slot(str)
     def _on_transcription_error(self, error_msg):
         self.showMessage("Vibe RTTS", f"Transcription failed: {error_msg}",
-                         QSystemTrayIcon.MessageIcon.Critical, 3000)
+                         QSystemTrayIcon.MessageIcon.Warning, 3000)
         self._update_state(AppState.READY)
         self._transcribe_worker = None
+
+    # --- Engine control ---
+    @Slot()
+    def start_engine(self):
+        """Load the model without recording. Used by the menu and by the startup
+        preload (config.AUTO_START_ENGINE). No-op unless we are INACTIVE."""
+        if self._state != AppState.INACTIVE:
+            return
+        self._pending_record_after_load = False
+        self._update_state(AppState.LOADING)
+        self.daemon_manager.start()
 
     # --- Menu actions ---
     @Slot()
     def _on_engine_toggle(self):
         if self._state == AppState.INACTIVE:
-            self._pending_record_after_load = False
-            self._update_state(AppState.LOADING)
-            self.daemon_manager.start()
+            self.start_engine()
         elif self._state == AppState.READY:
             self.daemon_manager.stop()
 

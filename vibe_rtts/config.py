@@ -1,5 +1,6 @@
 from pathlib import Path
 import glob
+import os
 
 APP_NAME = "vibe-rtts"
 APP_DISPLAY_NAME = "Vibe RTTS"
@@ -23,6 +24,13 @@ DB_PATH = DATA_DIR / "history.db"
 DAEMON_MODEL = "large-v3"
 DAEMON_DEVICE = "cuda"
 DAEMON_COMPUTE_TYPE = "int8"
+
+# Load the model as soon as the app opens, so the tray starts in READY instead of
+# waiting for a click. Set VIBE_RTTS_AUTOSTART_ENGINE=0 to open without preloading
+# (useful when another job needs the GPU memory).
+AUTO_START_ENGINE = os.environ.get(
+    "VIBE_RTTS_AUTOSTART_ENGINE", "1"
+).strip().lower() not in ("0", "false", "no", "off")
 
 # Shortcuts
 SHORTCUT_COMPONENT = "vibe-rtts"

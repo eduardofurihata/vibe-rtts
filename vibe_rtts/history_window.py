@@ -43,10 +43,7 @@ class HistoryItemWidget(QWidget):
         layout.addWidget(copy_btn)
 
     def _on_copy(self):
-        subprocess.Popen(
-            ["wl-copy", self._text],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
+        subprocess.Popen(["wl-copy", self._text], stdout=subprocess.DEVNULL)
         sender = self.sender()
         sender.setText("Copied!")
         QTimer.singleShot(1500, lambda: sender.setText("Copy"))

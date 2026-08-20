@@ -3,9 +3,10 @@ import signal
 import sys
 
 from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QTimer
 from PySide6.QtDBus import QDBusConnection
 
-from vibe_rtts.config import APP_NAME, APP_DISPLAY_NAME, DBUS_SERVICE
+from vibe_rtts.config import APP_NAME, APP_DISPLAY_NAME, DBUS_SERVICE, AUTO_START_ENGINE
 
 
 def main():
@@ -47,6 +48,13 @@ def main():
     )
     tray.show()
 
+    # Preload the model so we open in READY instead of waiting for a click.
+    # Deferred to the first event loop tick on purpose: DaemonManager.start()
+    # probes the socket with a 2s timeout, which would otherwise hold up the
+    # tray icon whenever a stale socket is lying around.
+    if AUTO_START_ENGINE:
+        QTimer.singleShot(0, tray.start_engine)
+
     # Cleanup: unregister shortcuts so numpad keys return to normal.
     # Must run on normal exit, tray Quit, SIGTERM, and SIGINT.
     _cleaned = False
@@ -70,5 +78,13 @@ def main():
 
     signal.signal(signal.SIGTERM, _signal_handler)
     signal.signal(signal.SIGINT, _signal_handler)
+
+    # Qt's event loop runs in C++, so a Python signal handler only fires once the
+    # interpreter gets control back. Without this idle tick, a SIGTERM (logout,
+    # systemctl) sits pending and the engine keeps holding the GPU memory.
+    _signal_tick = QTimer()
+    _signal_tick.setInterval(200)
+    _signal_tick.timeout.connect(lambda: None)
+    _signal_tick.start()
 
     sys.exit(app.exec())

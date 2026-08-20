@@ -123,7 +123,6 @@ class ShortcutHandler(QObject):
             proc = subprocess.Popen(
                 ["dbus-monitor", "--session", match_rule],
                 stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
                 text=True,
             )
             last_toggle = 0.0
