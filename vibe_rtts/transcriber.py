@@ -9,8 +9,16 @@ _TRANSCRIBE_TIMEOUT = 2 * 60 * 60
 
 
 class TranscribeWorker(QThread):
-    finished = Signal(str, str)  # text, language
-    error = Signal(str)
+    """Sends a wav to the daemon and reports back.
+
+    The signals are named after the domain (like RecordingEngine's) and NOT
+    `finished`/`error`: `finished` belongs to QThread and tells the owner when
+    the thread has really ended. Shadowing it meant nobody could know that, and
+    dropping the worker while it still ran destroyed a running QThread — an abort.
+    """
+
+    transcribed = Signal(str, str)  # text, language
+    failed = Signal(str)
 
     def __init__(self, wav_path: str, parent=None):
         super().__init__(parent)
@@ -35,11 +43,11 @@ class TranscribeWorker(QThread):
             response = b"".join(chunks).decode().strip()
 
             if not response:
-                self.error.emit("No speech detected")
+                self.failed.emit("No speech detected")
                 return
 
             if response.startswith("ERROR:"):
-                self.error.emit(response)
+                self.failed.emit(response)
                 return
 
             # Parse "lang:text" format
@@ -51,11 +59,11 @@ class TranscribeWorker(QThread):
 
             text = text.strip()
             if text:
-                self.finished.emit(text, language)
+                self.transcribed.emit(text, language)
             else:
-                self.error.emit("No speech detected")
+                self.failed.emit("No speech detected")
 
         except socket.timeout:
-            self.error.emit("Transcription timed out")
+            self.failed.emit("Transcription timed out")
         except Exception as e:
-            self.error.emit(str(e))
+            self.failed.emit(str(e))

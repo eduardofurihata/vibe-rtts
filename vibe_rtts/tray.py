@@ -5,6 +5,7 @@ from PySide6.QtGui import QIcon, QAction
 from PySide6.QtCore import QTimer, Slot
 
 from vibe_rtts.config import ICONS_DIR, APP_DISPLAY_NAME
+from vibe_rtts.proc import run_detached
 
 
 class AppState(Enum):
@@ -87,23 +88,21 @@ class TrayManager(QSystemTrayIcon):
         self.daemon_manager.engine_stopped.connect(self._on_engine_stopped)
         self.daemon_manager.engine_error.connect(self._on_engine_error)
         self.recorder.recording_stopped.connect(self._on_recording_stopped)
+        self.recorder.recording_failed.connect(self._on_recording_failed)
         self.shortcut_handler.shortcut_activated.connect(self._on_toggle)
         self.shortcut_handler.paste_activated.connect(self._on_paste)
 
     # --- Paste (Numpad +) ---
     @Slot()
     def _on_paste(self):
-        """Simulate Ctrl+V via ydotool to paste clipboard into focused window."""
-        import subprocess
+        """Simulate Ctrl+Shift+V via ydotool to paste into the focused window."""
         print("[TRAY] Paste shortcut fired", flush=True)
         # ydotool uses raw Linux scancodes: KEY_LEFTCTRL=29, KEY_LEFTSHIFT=42, KEY_V=47
         # Sequence: Ctrl down, Shift down, V down, V up, Shift up, Ctrl up.
-        # Small delay lets the Numpad+ key release before we inject Ctrl+Shift+V.
-        subprocess.Popen(
-            "sleep 0.1 && ydotool key 29:1 42:1 47:1 47:0 42:0 29:0",
-            shell=True,
-            stdout=subprocess.DEVNULL,
-        )
+        # The delay lets the Numpad+ key release before we inject Ctrl+Shift+V —
+        # a timer instead of a shell sleep, which used to leave a zombie behind.
+        QTimer.singleShot(100, lambda: run_detached(
+            "ydotool", ["key", "29:1", "42:1", "47:1", "47:0", "42:0", "29:0"], "TRAY"))
 
     def _update_state(self, new_state: AppState):
         print(f"[TRAY] State: {self._state.name} → {new_state.name}", flush=True)
@@ -183,9 +182,12 @@ class TrayManager(QSystemTrayIcon):
             self.recorder.start_recording()
 
         elif self._state == AppState.RECORDING:
-            # Stop recording → transcribe
+            # Leave RECORDING now, not when the wav is ready: from the user's point
+            # of view the capture ended the moment they hit the shortcut, and the
+            # conversion that follows takes a few hundred milliseconds.
+            self._update_state(AppState.TRANSCRIBING)
             self.recorder.stop_recording()
-            # _on_recording_stopped will handle the rest
+            # _on_recording_stopped / _on_recording_failed take it from here
 
         # Ignore if LOADING or TRANSCRIBING (debounce)
 
@@ -212,18 +214,32 @@ class TrayManager(QSystemTrayIcon):
     # --- Recording events ---
     @Slot(str)
     def _on_recording_stopped(self, wav_path):
-        self._update_state(AppState.TRANSCRIBING)
+        if self._state != AppState.TRANSCRIBING:  # the toggle usually got here first
+            self._update_state(AppState.TRANSCRIBING)
         from vibe_rtts.transcriber import TranscribeWorker
-        self._transcribe_worker = TranscribeWorker(wav_path)
-        self._transcribe_worker.finished.connect(self._on_transcription_done)
-        self._transcribe_worker.error.connect(self._on_transcription_error)
-        self._transcribe_worker.start()
+        worker = TranscribeWorker(wav_path)
+        worker.transcribed.connect(self._on_transcription_done)
+        worker.failed.connect(self._on_transcription_error)
+        # QThread.finished (the real one) fires when the thread has ended — the
+        # only moment it is safe to let go of the object.
+        worker.finished.connect(self._on_worker_finished)
+        self._transcribe_worker = worker
+        worker.start()
+
+    @Slot(str)
+    def _on_recording_failed(self, reason):
+        self.showMessage("Vibe RTTS", reason,
+                         QSystemTrayIcon.MessageIcon.Warning, 5000)
+        # Whatever went wrong, we must not stay stuck on RECORDING: the toggle
+        # would have nothing left to stop. AppState is the source of truth here —
+        # asking the daemon would mean a socket round-trip on the GUI thread, and
+        # if the engine had died, engine_stopped already moved us to INACTIVE.
+        if self._state in (AppState.RECORDING, AppState.TRANSCRIBING):
+            self._update_state(AppState.READY)
 
     @Slot(str, str)
     def _on_transcription_done(self, text, language):
-        import subprocess
-        # Copy to clipboard
-        subprocess.Popen(["wl-copy", text], stdout=subprocess.DEVNULL)
+        run_detached("wl-copy", [text], "TRAY")
         # Save to history
         if self.history_store:
             self.history_store.save(text, language)
@@ -232,13 +248,15 @@ class TrayManager(QSystemTrayIcon):
                          "Copied! Ctrl+Shift+V to paste",
                          QSystemTrayIcon.MessageIcon.Information, 3000)
         self._update_state(AppState.READY)
-        self._transcribe_worker = None
 
     @Slot(str)
     def _on_transcription_error(self, error_msg):
         self.showMessage("Vibe RTTS", f"Transcription failed: {error_msg}",
                          QSystemTrayIcon.MessageIcon.Warning, 3000)
         self._update_state(AppState.READY)
+
+    @Slot()
+    def _on_worker_finished(self):
         self._transcribe_worker = None
 
     # --- Engine control ---
@@ -260,6 +278,13 @@ class TrayManager(QSystemTrayIcon):
         elif self._state == AppState.READY:
             self.daemon_manager.stop()
 
+    def wait_for_transcription(self, timeout_ms: int = 3000):
+        """Let a running transcription finish before we tear the app down."""
+        worker = self._transcribe_worker
+        if worker is not None and worker.isRunning():
+            print("[TRAY] Waiting for the transcription to finish...", flush=True)
+            worker.wait(timeout_ms)
+
     @Slot()
     def _on_history(self):
         if self.history_window:
@@ -271,7 +296,8 @@ class TrayManager(QSystemTrayIcon):
     @Slot()
     def _on_quit(self):
         if self._state == AppState.RECORDING:
-            self.recorder.stop_recording()
+            self.recorder.abort()  # synchronous: never leave ffmpeg behind
+        self.wait_for_transcription()
         if self._state in (AppState.READY, AppState.LOADING, AppState.TRANSCRIBING):
             self.daemon_manager.stop()
         if self.shortcut_handler:

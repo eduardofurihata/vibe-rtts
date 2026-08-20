@@ -17,6 +17,11 @@ the result to your clipboard.
 - The GPU is mandatory: `large-v3` on CPU is too slow to be usable, so the daemon
   refuses to start rather than silently falling back (pass `--allow-cpu-fallback`
   to the daemon if you really want it)
+- If the capture fails — a Bluetooth headset switching the default device is
+  enough — the tray says why and returns to idle instead of staying stuck on
+  "recording"
+- The model daemon dies with the app, including when the app is killed or
+  crashes, so it never sits on the GPU memory afterwards
 
 ## Requirements
 

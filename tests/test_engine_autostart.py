@@ -1,10 +1,7 @@
 """Tests for the startup preload (config.AUTO_START_ENGINE) and for stopping a
 daemon we adopted instead of spawned."""
 import os
-import socket
 import sys
-import threading
-import time
 
 # Add project root to path so vibe_rtts can be imported
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -14,6 +11,7 @@ from PySide6.QtWidgets import QApplication
 
 from vibe_rtts.tray import TrayManager, AppState
 from vibe_rtts.daemon import DaemonManager
+from tests.fakes import FakeDaemon
 
 # Need a QApplication instance for Qt widgets
 app = QApplication.instance() or QApplication([])
@@ -73,56 +71,6 @@ class TestStartEngine:
         tray.daemon_manager.device = "cuda"
         tray._update_state(AppState.READY)
         assert "CPU" not in tray.toolTip()
-
-
-class FakeDaemon:
-    """Minimal stand-in for voice_daemon.py: answers status/device/shutdown."""
-
-    def __init__(self, socket_path, device="cuda", honor_shutdown=True):
-        self.path = str(socket_path)
-        self.device = device
-        self.honor_shutdown = honor_shutdown
-        self._server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self._server.bind(self.path)
-        self._server.listen(2)
-        self._running = True
-        self._thread = threading.Thread(target=self._serve, daemon=True)
-        self._thread.start()
-
-    def _serve(self):
-        while self._running:
-            try:
-                conn, _ = self._server.accept()
-            except OSError:
-                return
-            try:
-                cmd = conn.recv(4096).decode().strip()
-                if cmd == "status":
-                    conn.sendall(b"ready\n")
-                elif cmd == "device":
-                    conn.sendall(f"{self.device}\n".encode())
-                elif cmd == "shutdown":
-                    conn.sendall(b"bye\n")
-                    conn.close()
-                    if self.honor_shutdown:
-                        self.close()
-                        return
-                    continue
-                else:
-                    conn.sendall(b"ERROR: file not found\n")
-            except OSError:
-                pass
-            finally:
-                try:
-                    conn.close()
-                except OSError:
-                    pass
-
-    def close(self):
-        self._running = False
-        self._server.close()
-        if os.path.exists(self.path):
-            os.unlink(self.path)
 
 
 class TestAdoptedDaemon:
@@ -203,6 +151,16 @@ class TestAdoptedDaemon:
             daemon.close()
 
 
+class _FakeStderr:
+    """Stands in for proc.StderrTail without needing a real process."""
+
+    def __init__(self, text):
+        self._text = text
+
+    def text(self):
+        return self._text
+
+
 class TestCrashIsVisible:
     """A daemon that dies on its own (e.g. no VRAM) must not fail silently."""
 
@@ -213,7 +171,7 @@ class TestCrashIsVisible:
         mgr.engine_error.connect(errors.append)
         mgr.engine_stopped.connect(stopped)
 
-        mgr._stderr_tail = ["FATAL: could not load large-v3 on cuda: out of memory"]
+        mgr._stderr = _FakeStderr("FATAL: could not load large-v3 on cuda: out of memory")
         mgr._on_process_finished(1, None)
 
         assert errors and "out of memory" in errors[0]

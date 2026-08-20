@@ -10,6 +10,12 @@ from vibe_rtts.config import (
     DAEMON_MODEL, DAEMON_DEVICE, DAEMON_COMPUTE_TYPE,
     get_nvidia_ld_path,
 )
+from vibe_rtts.proc import StderrTail
+
+# An adopted daemon answers "shutdown" in well under a second; these are the
+# budgets before we escalate, kept short so the menu never feels stuck.
+_SHUTDOWN_WAIT_MS = 1500
+_SIGNAL_WAIT_MS = 1000
 
 
 class DaemonManager(QObject):
@@ -23,7 +29,7 @@ class DaemonManager(QObject):
         self._adopted = False  # True if we connected to an externally-started daemon
         self.device = None     # Device the running model is on ("cuda"/"cpu"/None)
         self._stopping = False  # True while we kill the daemon on purpose
-        self._stderr_tail = []  # Last stderr lines, to report why the daemon died
+        self._stderr = None     # Last stderr lines, to report why the daemon died
 
         # Health check timer
         self._health_timer = QTimer(self)
@@ -58,7 +64,6 @@ class DaemonManager(QObject):
             self.engine_ready.emit()
             return
 
-        self._stderr_tail = []
         self._process = QProcess(self)
         self._process.setProgram(str(PYTHON_PATH))
         self._process.setArguments([
@@ -66,6 +71,9 @@ class DaemonManager(QObject):
             "-m", DAEMON_MODEL,
             "-d", DAEMON_DEVICE,
             "-c", DAEMON_COMPUTE_TYPE,
+            # We own this daemon: if we die without cleanup, it must not keep the
+            # GPU memory hostage until someone notices.
+            "--exit-with-parent",
         ])
 
         # Set environment with NVIDIA libs
@@ -77,8 +85,8 @@ class DaemonManager(QObject):
                         f"{nvidia_path}:{existing}" if existing else nvidia_path)
         self._process.setProcessEnvironment(env)
 
+        self._stderr = StderrTail(self._process, "DAEMON")
         self._process.readyReadStandardOutput.connect(self._on_stdout)
-        self._process.readyReadStandardError.connect(self._on_stderr)
         self._process.finished.connect(self._on_process_finished)
         self._process.errorOccurred.connect(self._on_process_error)
 
@@ -96,20 +104,29 @@ class DaemonManager(QObject):
             self.engine_stopped.emit()
             return
 
-        if self._process and self._process.state() == QProcess.ProcessState.Running:
-            self._process.terminate()
-            if not self._process.waitForFinished(5000):
-                self._process.kill()
-                self._process.waitForFinished(2000)
+        # Hold a local reference: waitForFinished pumps events, so
+        # _on_process_finished can clear self._process midway through this block.
+        process = self._process
+        had_process = process is not None
+        if process and process.state() == QProcess.ProcessState.Running:
+            process.terminate()
+            if not process.waitForFinished(5000):
+                process.kill()
+                process.waitForFinished(2000)
 
         # Clean up socket
         if SOCKET_PATH.exists():
             SOCKET_PATH.unlink(missing_ok=True)
 
+        # waitForFinished pumps events, so _on_process_finished may already have
+        # run and reported the stop. Emitting again would just be noise.
+        already_reported = had_process and self._process is None
+
         self._process = None
         self.device = None
         self._stopping = False
-        self.engine_stopped.emit()
+        if not already_reported:
+            self.engine_stopped.emit()
 
     def _on_stdout(self):
         if not self._process:
@@ -121,14 +138,6 @@ class DaemonManager(QObject):
             self._health_timer.start()
             self.engine_ready.emit()
 
-    def _on_stderr(self):
-        if not self._process:
-            return
-        data = self._process.readAllStandardError().data().decode(errors="replace")
-        print(f"[DAEMON] {data.rstrip()}", flush=True)
-        self._stderr_tail.extend(line for line in data.splitlines() if line.strip())
-        del self._stderr_tail[:-5]
-
     def _on_process_finished(self, exit_code, exit_status):
         self._health_timer.stop()
         self._process = None
@@ -138,7 +147,7 @@ class DaemonManager(QObject):
         # A crash (e.g. no VRAM left) must be visible: emitting engine_stopped alone
         # would send the tray back to INACTIVE with no explanation.
         if exit_code != 0 and not self._stopping:
-            reason = " ".join(self._stderr_tail).strip() or f"exit code {exit_code}"
+            reason = (self._stderr.text() if self._stderr else "") or f"exit code {exit_code}"
             self.engine_error.emit(reason)
             return
         self._stopping = False
@@ -179,10 +188,8 @@ class DaemonManager(QObject):
             return
 
         self._ask("shutdown")
-        for _ in range(30):  # ~3s for the model to be torn down
-            if not SOCKET_PATH.exists():
-                return
-            time.sleep(0.1)
+        if self._wait_for(lambda: not SOCKET_PATH.exists(), _SHUTDOWN_WAIT_MS):
+            return
 
         pids = self._find_daemon_pids()
         if not pids:
@@ -195,12 +202,19 @@ class DaemonManager(QObject):
         for sig in ("-TERM", "-KILL"):
             for pid in pids:
                 subprocess.run(["kill", sig, pid], capture_output=True)
-            for _ in range(20):  # ~2s
-                if not self._find_daemon_pids():
-                    SOCKET_PATH.unlink(missing_ok=True)
-                    return
-                time.sleep(0.1)
+            if self._wait_for(lambda: not self._find_daemon_pids(), _SIGNAL_WAIT_MS):
+                SOCKET_PATH.unlink(missing_ok=True)
+                return
         self.engine_error.emit("Could not kill the transcription daemon; VRAM may stay in use.")
+
+    @staticmethod
+    def _wait_for(condition, budget_ms: int, step_ms: int = 100) -> bool:
+        """Poll a cheap condition until it holds or the budget runs out."""
+        for _ in range(max(1, budget_ms // step_ms)):
+            if condition():
+                return True
+            time.sleep(step_ms / 1000)
+        return condition()
 
     def _find_daemon_pids(self) -> list[str]:
         """PIDs running our daemon script, so we never kill someone else's process."""

@@ -54,6 +54,7 @@ class ShortcutHandler(QObject):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._registered = False
+        self._monitor_proc = None
         self._register_all_actions()
         self._start_dbus_monitor_listener()
 
@@ -119,12 +120,17 @@ class ShortcutHandler(QObject):
             "member='globalShortcutPressed'"
         )
 
+        # Started here, not inside the thread: the owner has to exist before
+        # cleanup() can be called, otherwise a fast quit leaves an orphan
+        # dbus-monitor behind — one per app run.
+        proc = subprocess.Popen(
+            ["dbus-monitor", "--session", match_rule],
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        self._monitor_proc = proc
+
         def monitor():
-            proc = subprocess.Popen(
-                ["dbus-monitor", "--session", match_rule],
-                stdout=subprocess.PIPE,
-                text=True,
-            )
             last_toggle = 0.0
             last_paste = 0.0
             in_signal = False
@@ -170,12 +176,14 @@ class ShortcutHandler(QObject):
         print(f"[SHORTCUT] Listening on {_COMPONENT_PATH}", flush=True)
 
     def cleanup(self):
-        """Unbind all shortcut keys so they return to normal behavior.
+        """Unbind all shortcut keys and stop listening.
 
         Sets each action's keys to [0] (no key) via setShortcut, which
         removes the KWin key grabs. On next startup, _register_all_actions
         will re-set the proper keys.
         """
+        self._stop_dbus_monitor()
+
         for action in _ACTIONS:
             action_id_arg = "array:string:" + ",".join(action["id"])
             subprocess.run(
@@ -190,3 +198,15 @@ class ShortcutHandler(QObject):
                 capture_output=True, text=True,
             )
         print("[SHORTCUT] Keys unbound (restored to normal)", flush=True)
+
+    def _stop_dbus_monitor(self):
+        proc = self._monitor_proc
+        self._monitor_proc = None
+        if proc is None or proc.poll() is not None:
+            return
+        proc.terminate()
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        print("[SHORTCUT] Listener stopped", flush=True)

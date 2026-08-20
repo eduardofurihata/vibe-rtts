@@ -1,9 +1,10 @@
 import atexit
 import signal
+import socket
 import sys
 
 from PySide6.QtWidgets import QApplication
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QSocketNotifier, QTimer
 from PySide6.QtDBus import QDBusConnection
 
 from vibe_rtts.config import APP_NAME, APP_DISPLAY_NAME, DBUS_SERVICE, AUTO_START_ENGINE
@@ -64,6 +65,8 @@ def main():
         if _cleaned:
             return
         _cleaned = True
+        recorder.abort()
+        tray.wait_for_transcription()
         shortcut_handler.cleanup()
         if daemon_manager.is_running():
             daemon_manager.stop()
@@ -71,20 +74,31 @@ def main():
     atexit.register(cleanup)
     app.aboutToQuit.connect(cleanup)
 
-    # SIGTERM/SIGINT: run cleanup then exit (atexit won't fire on raw signals)
-    def _signal_handler(signum, frame):
-        cleanup()
-        sys.exit(0)
+    # SIGTERM/SIGINT (logout, systemctl, Ctrl+C) must free the GPU, and Qt's event
+    # loop runs in C++ — a Python handler would only fire once the interpreter got
+    # control back. set_wakeup_fd has the C-level handler write a byte, which wakes
+    # the loop through this notifier; no timer polling for nothing.
+    #
+    # The handler itself does nothing on purpose. Running cleanup() and sys.exit()
+    # inside it means unwinding through PySide's slot dispatch, which segfaults —
+    # so the notifier asks Qt for an orderly quit and aboutToQuit runs cleanup at
+    # a safe point.
+    wake_w, wake_r = socket.socketpair()
+    wake_w.setblocking(False)
+    wake_r.setblocking(False)
+    signal.set_wakeup_fd(wake_w.fileno())
+    signal_notifier = QSocketNotifier(wake_r.fileno(), QSocketNotifier.Type.Read)
 
-    signal.signal(signal.SIGTERM, _signal_handler)
-    signal.signal(signal.SIGINT, _signal_handler)
+    def _on_signal_wakeup():
+        try:
+            wake_r.recv(1024)
+        except BlockingIOError:
+            pass
+        print(f"[{APP_NAME}] Signal received, shutting down.", flush=True)
+        app.quit()
 
-    # Qt's event loop runs in C++, so a Python signal handler only fires once the
-    # interpreter gets control back. Without this idle tick, a SIGTERM (logout,
-    # systemctl) sits pending and the engine keeps holding the GPU memory.
-    _signal_tick = QTimer()
-    _signal_tick.setInterval(200)
-    _signal_tick.timeout.connect(lambda: None)
-    _signal_tick.start()
+    signal_notifier.activated.connect(lambda *_: _on_signal_wakeup())
+    signal.signal(signal.SIGTERM, lambda *_: None)
+    signal.signal(signal.SIGINT, lambda *_: None)
 
     sys.exit(app.exec())

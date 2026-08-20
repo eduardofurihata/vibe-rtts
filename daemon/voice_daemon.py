@@ -13,6 +13,7 @@ Commands via socket:
 """
 
 import argparse
+import ctypes
 import os
 import signal
 import socket
@@ -24,6 +25,31 @@ from faster_whisper import WhisperModel
 
 SOCKET_PATH = "/tmp/voice-daemon.sock"
 
+_PR_SET_PDEATHSIG = 1
+
+
+def _die_with_parent():
+    """Ask the kernel to SIGTERM us when our parent dies.
+
+    Without this, an app that dies without cleanup (crash, SIGKILL) leaves the
+    model resident and the GPU memory unavailable. PySide6 exposes no
+    QProcess.setChildProcessModifier, so the child arms it for itself.
+    """
+    try:
+        rc = ctypes.CDLL("libc.so.6", use_errno=True).prctl(_PR_SET_PDEATHSIG, signal.SIGTERM)
+    except Exception as e:
+        print(f"Could not arm parent-death signal: {e}", file=sys.stderr, flush=True)
+        return
+    if rc != 0:
+        print(f"prctl(PR_SET_PDEATHSIG) failed with {rc}: this daemon may outlive its parent",
+              file=sys.stderr, flush=True)
+        return
+    # The parent may have died between fork and prctl, in which case the signal
+    # was never queued: check for the reparent-to-init that proves it.
+    if os.getppid() == 1:
+        print("Parent already gone before startup. Exiting.", file=sys.stderr, flush=True)
+        sys.exit(0)
+
 
 def main():
     parser = argparse.ArgumentParser(description="Voice transcription daemon")
@@ -31,11 +57,17 @@ def main():
     parser.add_argument("-d", "--device", default="cuda", choices=["cuda", "cpu"])
     parser.add_argument("-c", "--compute-type", default="int8")
     parser.add_argument("-b", "--beam-size", type=int, default=5)
+    parser.add_argument("--exit-with-parent", action="store_true",
+                        help="Die when the process that started us dies, so a crashed "
+                             "app never leaves the model holding GPU memory.")
     parser.add_argument("--allow-cpu-fallback", action="store_true",
                         help="Fall back to CPU if CUDA fails. Off by default: on CPU "
                              "large-v3 is too slow to be usable, and a silent "
                              "fallback would look ready while being useless.")
     args = parser.parse_args()
+
+    if args.exit_with_parent:
+        _die_with_parent()
 
     print(f"Loading {args.model} on {args.device}...", flush=True)
     device = args.device
@@ -50,17 +82,28 @@ def main():
             print(f"FATAL: could not load {args.model} on {device}: {e}", file=sys.stderr, flush=True)
             sys.exit(1)
 
-    # Warm up before announcing readiness: the first transcription otherwise pays
-    # the CTranslate2/cuDNN kernel JIT cost. 1s of silence at 16kHz is enough.
+    # Warm up before announcing readiness, mirroring the production call so the
+    # user's first dictation pays nothing extra. The two passes load different
+    # things and fail for different reasons, so they get different policies.
+    silence = np.zeros(16000, dtype=np.float32)  # 1s at 16kHz
     print("Warming up...", flush=True)
+
+    # Pass 1 — build the Silero VAD (ONNX sessions, lazy behind an lru_cache in
+    # faster_whisper). Runs on CPU, so failing here says nothing about the GPU:
+    # the first real transcription just pays for it instead.
     try:
-        segments, _ = model.transcribe(np.zeros(16000, dtype=np.float32),
-                                       beam_size=1, vad_filter=False)
-        list(segments)  # transcribe() is lazy; consume it to actually run inference
+        list(model.transcribe(silence, vad_filter=True, beam_size=1)[0])
     except Exception as e:
-        # On CUDA a failing warmup means real transcriptions will fail too (typically
-        # OOM): die instead of serving a socket that looks ready. WhisperModel() can
-        # succeed and only blow up here, so this is the real GPU check.
+        print(f"VAD warmup failed (first transcription will be slower): {e}",
+              file=sys.stderr, flush=True)
+
+    # Pass 2 — the encoder/decoder with the beam size production uses. This is
+    # the real GPU check: WhisperModel() can construct and only blow up here
+    # (typically out of memory), and serving a socket that looks ready while
+    # inference is broken is worse than not starting.
+    try:
+        list(model.transcribe(silence, vad_filter=False, beam_size=args.beam_size)[0])
+    except Exception as e:
         if device == "cuda":
             print(f"FATAL: GPU warmup failed, refusing to serve: {e}",
                   file=sys.stderr, flush=True)

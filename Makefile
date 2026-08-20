@@ -4,7 +4,9 @@ VENV := $(HOME)/GitHub/vibe-whisper-transcriber/.venv
 SCRIPT := $(CURDIR)/scripts/vibe-rtts.sh
 DESKTOP_DIR := $(HOME)/.local/share/applications
 DESKTOP_FILE := $(DESKTOP_DIR)/vibe-rtts.desktop
-ICON := $(CURDIR)/vibe_rtts/icons/mic-active.png
+# Themed icon name (freedesktop icon naming spec): follows the user's icon theme
+# and keeps `make dev` idempotent against the installed .desktop.
+ICON := audio-input-microphone
 
 run:
 	@$(SCRIPT)

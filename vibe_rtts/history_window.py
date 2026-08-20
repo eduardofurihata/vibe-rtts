@@ -1,5 +1,3 @@
-import subprocess
-
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
     QPushButton, QLabel, QLineEdit,
@@ -7,6 +5,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QTimer
 
 from vibe_rtts.history import HistoryStore
+from vibe_rtts.proc import run_detached
 
 
 class HistoryItemWidget(QWidget):
@@ -43,7 +42,7 @@ class HistoryItemWidget(QWidget):
         layout.addWidget(copy_btn)
 
     def _on_copy(self):
-        subprocess.Popen(["wl-copy", self._text], stdout=subprocess.DEVNULL)
+        run_detached("wl-copy", [self._text], "HISTORY")
         sender = self.sender()
         sender.setText("Copied!")
         QTimer.singleShot(1500, lambda: sender.setText("Copy"))
