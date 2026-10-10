@@ -16,6 +16,8 @@ ICON := audio-input-microphone
 # macOS app + login agent (make install-mac). launchd runs the app — the bundle is
 # only a button that starts the agent: macOS 27 hides the menu bar icon of a
 # process owned by an unsigned bundle, but shows it for one launchd started.
+# ProcessType=Interactive: without it macOS throttles the job as background work
+# and ffmpeg keeps under a third of the audio (6s spoken -> 1.7s recorded).
 MAC_APP := $(HOME)/Applications/Vibe RTTS.app
 MAC_AGENT := $(HOME)/Library/LaunchAgents/com.github.furihata.vibe-rtts.plist
 
@@ -40,7 +42,7 @@ setup-mac:
 install-mac:
 	@scripts/make-macos-app.sh "$(MAC_APP)"
 	@mkdir -p "$(dir $(MAC_AGENT))"
-	@printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n<dict>\n    <key>Label</key>\n    <string>com.github.furihata.vibe-rtts</string>\n    <key>ProgramArguments</key>\n    <array>\n        <string>$(SCRIPT)</string>\n    </array>\n    <key>RunAtLoad</key>\n    <true/>\n    <key>StandardOutPath</key>\n    <string>$(HOME)/Library/Logs/vibe-rtts.log</string>\n    <key>StandardErrorPath</key>\n    <string>$(HOME)/Library/Logs/vibe-rtts.log</string>\n</dict>\n</plist>\n' > "$(MAC_AGENT)"
+	@printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n<dict>\n    <key>Label</key>\n    <string>com.github.furihata.vibe-rtts</string>\n    <key>ProgramArguments</key>\n    <array>\n        <string>$(MAC_APP)/Contents/MacOS/vibe-rtts</string>\n    </array>\n    <key>EnvironmentVariables</key>\n    <dict>\n        <key>VIBE_RTTS_AGENT</key>\n        <string>1</string>\n    </dict>\n    <key>AssociatedBundleIdentifiers</key>\n    <array>\n        <string>com.github.furihata.vibe-rtts</string>\n    </array>\n    <key>RunAtLoad</key>\n    <true/>\n    <key>ProcessType</key>\n    <string>Interactive</string>\n    <key>StandardOutPath</key>\n    <string>$(HOME)/Library/Logs/vibe-rtts.log</string>\n    <key>StandardErrorPath</key>\n    <string>$(HOME)/Library/Logs/vibe-rtts.log</string>\n</dict>\n</plist>\n' > "$(MAC_AGENT)"
 	@launchctl bootout gui/$$(id -u) "$(MAC_AGENT)" 2>/dev/null || true
 	@launchctl bootstrap gui/$$(id -u) "$(MAC_AGENT)"
 	@echo "Installed: $(MAC_APP) (opens at login; logs in ~/Library/Logs/vibe-rtts.log)"

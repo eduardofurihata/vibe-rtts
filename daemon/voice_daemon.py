@@ -79,6 +79,31 @@ def _watch_parent_macos():
     threading.Thread(target=watch, daemon=True).start()
 
 
+_FRAME = 480                # 30 ms at 16 kHz
+_MIN_SPEECH_S = 0.3         # less than this above the floor is not a sentence
+_ABS_FLOOR = 500            # int16 RMS; room noise peaks ~430, speech on the mic 600-2500
+
+
+def has_speech(audio: np.ndarray) -> bool:
+    """Energy gate: is there at least _MIN_SPEECH_S of sound clearly above the room?
+
+    mlx-whisper has no VAD and its no-speech score comes back 0.00 even for pure
+    silence, which it happily transcribes as "Thank you." — and auto-paste would
+    then type that into the user's document. Speech on the built-in mic sits in
+    the thousands (int16 RMS), room noise around a hundred, so an absolute floor
+    separates them. Not relative to the clip itself: continuous speech with no
+    pauses would then be its own baseline and get thrown away.
+    """
+    if audio.size < _FRAME:
+        return False
+    samples = audio.astype(np.float32)
+    if np.abs(samples).max() <= 1.0:  # float audio in [-1, 1]
+        samples = samples * 32768
+    frames = samples[: samples.size // _FRAME * _FRAME].reshape(-1, _FRAME)
+    rms = np.sqrt((frames ** 2).mean(axis=1))
+    return (rms > _ABS_FLOOR).sum() * _FRAME / 16000 >= _MIN_SPEECH_S
+
+
 def _load_mlx(model_name):
     """Load mlx-whisper on the Apple GPU and return transcribe(path, language).
 
@@ -87,8 +112,13 @@ def _load_mlx(model_name):
     first dictation — if anything is wrong.
     """
     import mlx_whisper
+    from mlx_whisper.audio import load_audio
 
     def transcribe(audio, language=None):
+        if isinstance(audio, str):
+            audio = np.array(load_audio(audio), dtype=np.float32)  # mx.array -> numpy
+        if not has_speech(audio):
+            return "", None  # the app reports "No speech detected"
         result = mlx_whisper.transcribe(
             audio, path_or_hf_repo=model_name, language=language,
             verbose=None,  # None = no progress bar on stdout
@@ -97,7 +127,10 @@ def _load_mlx(model_name):
 
     print("Warming up...", flush=True)
     try:
-        transcribe(np.zeros(16000, dtype=np.float32))  # 1s of silence at 16kHz
+        # Real noise, not zeros: silence would be stopped by the speech gate and
+        # never load the model, which is the whole point of warming up.
+        rng = np.random.default_rng(0)
+        transcribe(rng.normal(0, 0.3, 16000).astype(np.float32))
     except Exception as e:
         print(f"FATAL: could not load {model_name} with mlx-whisper: {e}",
               file=sys.stderr, flush=True)

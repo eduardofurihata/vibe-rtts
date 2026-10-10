@@ -198,3 +198,39 @@ class TestFocusDetectionSmoke:
             assert isinstance(real.focused_text_input(), bool)
         finally:
             importlib.reload(pm)
+
+
+class TestSpeechGate:
+    """Silence must not become "Thank you." (and then be auto-pasted)."""
+
+    @pytest.fixture(scope="class")
+    def gate(self):
+        import importlib.util
+        import numpy as np
+        path = os.path.join(os.path.dirname(__file__), "..", "daemon", "voice_daemon.py")
+        spec = importlib.util.spec_from_file_location("voice_daemon", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.has_speech, np
+
+    def test_silence_is_not_speech(self, gate):
+        has_speech, np = gate
+        assert not has_speech(np.zeros(48000, dtype=np.int16))
+
+    def test_room_noise_is_not_speech(self, gate):
+        has_speech, np = gate
+        rng = np.random.default_rng(1)
+        assert not has_speech(rng.normal(0, 110, 80000).astype(np.int16))
+
+    def test_speech_over_room_noise_is_speech(self, gate):
+        has_speech, np = gate
+        rng = np.random.default_rng(2)
+        audio = rng.normal(0, 110, 80000)
+        t = np.arange(16000) / 16000
+        audio[20000:36000] += 2000 * np.sin(2 * np.pi * 220 * t)  # 1s of "voice"
+        assert has_speech(audio.astype(np.int16))
+
+    def test_float_audio_is_scaled(self, gate):
+        has_speech, np = gate
+        t = np.arange(16000) / 16000
+        assert has_speech((0.1 * np.sin(2 * np.pi * 220 * t)).astype(np.float32))

@@ -1,11 +1,12 @@
 #!/bin/bash
 # Build ~/Applications/Vibe RTTS.app: a launcher button for the login agent.
 #
-# The bundle does not run the app itself: it asks launchd to start the agent that
-# `make install-mac` installs, which runs scripts/vibe-rtts.sh. macOS 27 hides the
-# menu bar icon of a process owned by a new, unsigned bundle — the app would run,
-# shortcuts and all, with no icon anywhere — while the same process started by
-# launchd shows it. The code stays in the repo, so a git pull updates the app.
+# launchd runs the app (the login agent from `make install-mac`), through this
+# bundle's compiled launcher: started by LaunchServices (a click), macOS 27 hides
+# the menu bar icon of a process owned by a new, unsigned bundle; started by
+# launchd it shows it. The launcher staying alive as the app's parent is what
+# gives the Microphone permission an owner macOS can ask about. A click on the
+# bundle only starts the agent. The code stays in the repo: a git pull updates it.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -16,16 +17,22 @@ AGENT_LABEL="com.github.furihata.vibe-rtts"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
-cat > "$APP/Contents/MacOS/vibe-rtts" <<EOF
+# Main executable: a compiled launcher that stays alive as the app's parent, so
+# the Microphone permission belongs to "Vibe RTTS" (see scripts/macos/launcher.c).
+clang -O2 -Wall -DVIBE_RTTS_REPO="\"$REPO\"" \
+    -o "$APP/Contents/MacOS/vibe-rtts" "$REPO/scripts/macos/launcher.c"
+
+# What a click does. Already running: a short-lived instance finds it, asks it to
+# say so in a notification and exits (app.py) — otherwise a click would seem to do
+# nothing. Not running: start the login agent.
+cat > "$APP/Contents/Resources/click.sh" <<EOF
 #!/bin/bash
-# Already running: a short-lived instance finds it, asks it to say so in a
-# notification and exits (app.py) — otherwise a click would seem to do nothing.
 if /bin/launchctl print "gui/\$(id -u)/$AGENT_LABEL" 2>/dev/null | grep -q "state = running"; then
     exec "$REPO/scripts/vibe-rtts.sh"
 fi
 exec /bin/launchctl kickstart "gui/\$(id -u)/$AGENT_LABEL"
 EOF
-chmod +x "$APP/Contents/MacOS/vibe-rtts"
+chmod +x "$APP/Contents/Resources/click.sh"
 
 cat > "$APP/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>

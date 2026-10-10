@@ -85,12 +85,23 @@ Spotlight or Finder starts it — or, if it is already running, shows a notifica
 saying so. It points at this repo, so a `git pull` updates it without reinstalling.
 Logs: `~/Library/Logs/vibe-rtts.log`. The first start downloads the model (~1.6 GB).
 
-Under the hood launchd runs the app, and the bundle is only a button that starts
-it: macOS 27 hides the menu bar icon of a process owned by a new, unsigned
-bundle, while the same process started by launchd shows it.
+Under the hood a launchd agent runs the app through the bundle's compiled
+launcher (`scripts/macos/launcher.c`), and a click on the bundle only starts that
+agent. Each piece is there for a reason found the hard way:
 
-macOS asks for two permissions. They go to the Python process the app runs in
-(listed as `python3.12`), or to your terminal when you use `make run`:
+- started by a click (LaunchServices), macOS 27 hides the menu bar icon of a
+  process owned by a new, unsigned bundle — launchd-started, it shows;
+- the launcher stays alive as the app's parent, so the Microphone permission
+  belongs to "Vibe RTTS" and macOS can ask for it;
+- the agent is `ProcessType=Interactive`: as default background work macOS
+  throttled it and ffmpeg kept under a third of the audio, which Whisper turned
+  into "Thank you." / "Hola.".
+
+Recordings with no speech (silence, room noise) are reported as "No speech
+detected" instead of being transcribed: mlx-whisper has no VAD and invents text
+for silence, which auto-paste would then type into your document.
+
+macOS asks for two permissions, for "Vibe RTTS" (or your terminal with `make run`):
 
 - **Microphone** — asked on the first recording.
 - **Accessibility** — only for ⌃. (posting ⌘V into the focused app). Without it,
