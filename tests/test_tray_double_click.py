@@ -83,3 +83,17 @@ class TestTrayDoubleClick:
             tray._on_activated(QSystemTrayIcon.ActivationReason.Context)
             tray._on_activated(QSystemTrayIcon.ActivationReason.Context)
             mock_toggle.assert_not_called()
+
+
+class TestRecordingCycleIcons:
+    """Ready, recording and transcribing must each have their own icon."""
+
+    def test_each_cycle_state_has_a_distinct_icon(self):
+        tray = TrayManager()
+        tray.daemon_manager = MagicMock(device="mps")
+        keys = {}
+        for state in (AppState.READY, AppState.RECORDING, AppState.TRANSCRIBING):
+            tray._update_state(state)
+            assert not tray.icon().isNull()
+            keys[state] = tray.icon().cacheKey()
+        assert len(set(keys.values())) == 3

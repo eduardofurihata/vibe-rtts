@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Voice transcription daemon — keeps faster-whisper model loaded in GPU memory.
+"""Voice transcription daemon — keeps the Whisper model loaded in GPU memory.
+
+Linux runs faster-whisper on CUDA; macOS (--device mps) runs mlx-whisper on the
+Apple GPU, since faster-whisper cannot use Metal.
 
 Listens on a Unix socket. Accepts audio file paths, transcribes, returns text.
 Model stays loaded so transcription is near-instant (<1s).
@@ -8,7 +11,7 @@ Commands via socket:
   /path/to/audio.wav       → transcribe file, return "lang:text"
   pt:/path/to/audio.wav    → transcribe with forced language, return "pt:text"
   status                   → return "ready"
-  device                   → return the device the model is loaded on ("cuda"/"cpu")
+  device                   → return the device the model is loaded on ("cuda"/"mps"/"cpu")
   shutdown                 → reply "bye" and exit, freeing the GPU memory
 """
 
@@ -19,9 +22,9 @@ import signal
 import socket
 import sys
 import threading
+import time
 
 import numpy as np
-from faster_whisper import WhisperModel
 
 SOCKET_PATH = "/tmp/voice-daemon.sock"
 
@@ -35,6 +38,9 @@ def _die_with_parent():
     model resident and the GPU memory unavailable. PySide6 exposes no
     QProcess.setChildProcessModifier, so the child arms it for itself.
     """
+    if sys.platform == "darwin":
+        _watch_parent_macos()
+        return
     try:
         rc = ctypes.CDLL("libc.so.6", use_errno=True).prctl(_PR_SET_PDEATHSIG, signal.SIGTERM)
     except Exception as e:
@@ -51,10 +57,58 @@ def _die_with_parent():
         sys.exit(0)
 
 
+def _watch_parent_macos():
+    """macOS has no prctl(PR_SET_PDEATHSIG): watch for the reparent instead.
+
+    When our parent dies we are reparented (to launchd, pid 1), so getppid()
+    changing is the proof. A 1s poll costs nothing and bounds the leak to a second.
+    """
+    parent = os.getppid()
+    if parent == 1:
+        print("Parent already gone before startup. Exiting.", file=sys.stderr, flush=True)
+        sys.exit(0)
+
+    def watch():
+        while os.getppid() == parent:
+            time.sleep(1)
+        print("Parent died. Exiting.", file=sys.stderr, flush=True)
+        if os.path.exists(SOCKET_PATH):
+            os.unlink(SOCKET_PATH)
+        os._exit(0)
+
+    threading.Thread(target=watch, daemon=True).start()
+
+
+def _load_mlx(model_name):
+    """Load mlx-whisper on the Apple GPU and return transcribe(path, language).
+
+    mlx-whisper loads lazily on the first call, so the warm-up IS the load: it
+    downloads the model on the very first run and fails here — not on the user's
+    first dictation — if anything is wrong.
+    """
+    import mlx_whisper
+
+    def transcribe(audio, language=None):
+        result = mlx_whisper.transcribe(
+            audio, path_or_hf_repo=model_name, language=language,
+            verbose=None,  # None = no progress bar on stdout
+        )
+        return result.get("text", "").strip(), result.get("language")
+
+    print("Warming up...", flush=True)
+    try:
+        transcribe(np.zeros(16000, dtype=np.float32))  # 1s of silence at 16kHz
+    except Exception as e:
+        print(f"FATAL: could not load {model_name} with mlx-whisper: {e}",
+              file=sys.stderr, flush=True)
+        sys.exit(1)
+    return transcribe
+
+
 def main():
     parser = argparse.ArgumentParser(description="Voice transcription daemon")
     parser.add_argument("-m", "--model", default="large-v3")
-    parser.add_argument("-d", "--device", default="cuda", choices=["cuda", "cpu"])
+    parser.add_argument("-d", "--device", default="cuda", choices=["cuda", "mps", "cpu"])
     parser.add_argument("-c", "--compute-type", default="int8")
     parser.add_argument("-b", "--beam-size", type=int, default=5)
     parser.add_argument("--exit-with-parent", action="store_true",
@@ -71,45 +125,56 @@ def main():
 
     print(f"Loading {args.model} on {args.device}...", flush=True)
     device = args.device
-    try:
-        model = WhisperModel(args.model, device=device, compute_type=args.compute_type)
-    except Exception as e:
-        if device == "cuda" and args.allow_cpu_fallback:
-            print(f"GPU failed: {e}. Falling back to CPU.", flush=True)
-            device = "cpu"
-            model = WhisperModel(args.model, device=device, compute_type="int8")
-        else:
-            print(f"FATAL: could not load {args.model} on {device}: {e}", file=sys.stderr, flush=True)
-            sys.exit(1)
+    if device == "mps":
+        transcribe = _load_mlx(args.model)
+    else:
+        from faster_whisper import WhisperModel
+        try:
+            model = WhisperModel(args.model, device=device, compute_type=args.compute_type)
+        except Exception as e:
+            if device == "cuda" and args.allow_cpu_fallback:
+                print(f"GPU failed: {e}. Falling back to CPU.", flush=True)
+                device = "cpu"
+                model = WhisperModel(args.model, device=device, compute_type="int8")
+            else:
+                print(f"FATAL: could not load {args.model} on {device}: {e}", file=sys.stderr, flush=True)
+                sys.exit(1)
 
-    # Warm up before announcing readiness, mirroring the production call so the
-    # user's first dictation pays nothing extra. The two passes load different
-    # things and fail for different reasons, so they get different policies.
-    silence = np.zeros(16000, dtype=np.float32)  # 1s at 16kHz
-    print("Warming up...", flush=True)
+        # Warm up before announcing readiness, mirroring the production call so the
+        # user's first dictation pays nothing extra. The two passes load different
+        # things and fail for different reasons, so they get different policies.
+        silence = np.zeros(16000, dtype=np.float32)  # 1s at 16kHz
+        print("Warming up...", flush=True)
 
-    # Pass 1 — build the Silero VAD (ONNX sessions, lazy behind an lru_cache in
-    # faster_whisper). Runs on CPU, so failing here says nothing about the GPU:
-    # the first real transcription just pays for it instead.
-    try:
-        list(model.transcribe(silence, vad_filter=True, beam_size=1)[0])
-    except Exception as e:
-        print(f"VAD warmup failed (first transcription will be slower): {e}",
-              file=sys.stderr, flush=True)
-
-    # Pass 2 — the encoder/decoder with the beam size production uses. This is
-    # the real GPU check: WhisperModel() can construct and only blow up here
-    # (typically out of memory), and serving a socket that looks ready while
-    # inference is broken is worse than not starting.
-    try:
-        list(model.transcribe(silence, vad_filter=False, beam_size=args.beam_size)[0])
-    except Exception as e:
-        if device == "cuda":
-            print(f"FATAL: GPU warmup failed, refusing to serve: {e}",
+        # Pass 1 — build the Silero VAD (ONNX sessions, lazy behind an lru_cache in
+        # faster_whisper). Runs on CPU, so failing here says nothing about the GPU:
+        # the first real transcription just pays for it instead.
+        try:
+            list(model.transcribe(silence, vad_filter=True, beam_size=1)[0])
+        except Exception as e:
+            print(f"VAD warmup failed (first transcription will be slower): {e}",
                   file=sys.stderr, flush=True)
-            sys.exit(1)
-        print(f"Warmup failed (first transcription will be slower): {e}",
-              file=sys.stderr, flush=True)
+
+        # Pass 2 — the encoder/decoder with the beam size production uses. This is
+        # the real GPU check: WhisperModel() can construct and only blow up here
+        # (typically out of memory), and serving a socket that looks ready while
+        # inference is broken is worse than not starting.
+        try:
+            list(model.transcribe(silence, vad_filter=False, beam_size=args.beam_size)[0])
+        except Exception as e:
+            if device == "cuda":
+                print(f"FATAL: GPU warmup failed, refusing to serve: {e}",
+                      file=sys.stderr, flush=True)
+                sys.exit(1)
+            print(f"Warmup failed (first transcription will be slower): {e}",
+                  file=sys.stderr, flush=True)
+
+        def transcribe(audio, language=None):
+            kwargs = {"beam_size": args.beam_size, "vad_filter": True}
+            if language:
+                kwargs["language"] = language
+            segments, info = model.transcribe(audio, **kwargs)
+            return " ".join(seg.text.strip() for seg in segments).strip(), info.language
 
     print("Model loaded. Ready.", flush=True)
 
@@ -162,16 +227,11 @@ def main():
                 conn.sendall(b"ERROR: file not found\n")
                 return
 
-            kwargs = {"beam_size": args.beam_size, "vad_filter": True}
-            if language:
-                kwargs["language"] = language
-
             with lock:
-                segments, info = model.transcribe(path, **kwargs)
-                text = " ".join(seg.text.strip() for seg in segments).strip()
+                text, detected = transcribe(path, language)
 
             # Response format: "detected_lang:transcribed_text"
-            detected = info.language or "unknown"
+            detected = detected or "unknown"
             conn.sendall(f"{detected}:{text}\n".encode())
         except Exception as e:
             try:

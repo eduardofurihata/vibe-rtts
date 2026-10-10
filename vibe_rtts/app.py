@@ -5,9 +5,36 @@ import sys
 
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import QSocketNotifier, QTimer
-from PySide6.QtDBus import QDBusConnection
 
-from vibe_rtts.config import APP_NAME, APP_DISPLAY_NAME, DBUS_SERVICE, AUTO_START_ENGINE
+from vibe_rtts.config import APP_NAME, APP_DISPLAY_NAME, DBUS_SERVICE, AUTO_START_ENGINE, IS_MACOS
+
+
+def _claim_single_instance():
+    """Return an object that holds the instance lock, or None if another one runs.
+
+    Linux uses the DBus session bus. macOS has no session bus — registerService
+    would fail every time and the app would always think it was already running —
+    so there a QLocalServer plays the lock. Keep the returned object alive.
+    """
+    if not IS_MACOS:
+        from PySide6.QtDBus import QDBusConnection
+        bus = QDBusConnection.sessionBus()
+        return bus if bus.registerService(DBUS_SERVICE) else None
+
+    from PySide6.QtNetwork import QLocalServer, QLocalSocket
+    probe = QLocalSocket()
+    probe.connectToServer(APP_NAME)
+    if probe.waitForConnected(500):
+        # Opening the app again should not look like nothing happened: ask the
+        # running one to say where it is.
+        probe.write(b"show\n")
+        probe.waitForBytesWritten(500)
+        probe.disconnectFromServer()
+        return None
+    # Nobody answered: any socket file left there is from a crashed run.
+    QLocalServer.removeServer(APP_NAME)
+    server = QLocalServer()
+    return server if server.listen(APP_NAME) else None
 
 
 def main():
@@ -16,10 +43,12 @@ def main():
     app.setApplicationDisplayName(APP_DISPLAY_NAME)
     app.setDesktopFileName(APP_NAME)
     app.setQuitOnLastWindowClosed(False)
+    if IS_MACOS:
+        from vibe_rtts.macos_app import hide_dock_icon
+        hide_dock_icon()
 
-    # Single instance check via DBus
-    bus = QDBusConnection.sessionBus()
-    if not bus.registerService(DBUS_SERVICE):
+    instance_lock = _claim_single_instance()
+    if instance_lock is None:
         print(f"{APP_NAME} is already running.", file=sys.stderr)
         sys.exit(0)
 
@@ -28,7 +57,10 @@ def main():
     from vibe_rtts.daemon import DaemonManager
     from vibe_rtts.recorder import RecordingEngine
     from vibe_rtts.transcriber import TranscribeWorker
-    from vibe_rtts.shortcut import ShortcutHandler
+    if IS_MACOS:
+        from vibe_rtts.shortcut_macos import MacShortcutHandler as ShortcutHandler
+    else:
+        from vibe_rtts.shortcut import ShortcutHandler
     from vibe_rtts.history import HistoryStore
     from vibe_rtts.history_window import HistoryWindow
 
@@ -49,6 +81,18 @@ def main():
     )
     tray.show()
 
+    if IS_MACOS:
+        def _on_another_launch():
+            conn = instance_lock.nextPendingConnection()
+            if conn is None:
+                return
+            conn.disconnected.connect(conn.deleteLater)
+            print(f"[{APP_NAME}] Opened again while running; showing where we are.", flush=True)
+            tray.showMessage(APP_DISPLAY_NAME,
+                             "Already running — look for the mic in the menu bar.")
+
+        instance_lock.newConnection.connect(_on_another_launch)
+
     # Preload the model so we open in READY instead of waiting for a click.
     # Deferred to the first event loop tick on purpose: DaemonManager.start()
     # probes the socket with a 2s timeout, which would otherwise hold up the
@@ -56,7 +100,7 @@ def main():
     if AUTO_START_ENGINE:
         QTimer.singleShot(0, tray.start_engine)
 
-    # Cleanup: unregister shortcuts so numpad keys return to normal.
+    # Cleanup: unregister shortcuts so the keys return to normal.
     # Must run on normal exit, tray Quit, SIGTERM, and SIGINT.
     _cleaned = False
 

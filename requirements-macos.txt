@@ -1,0 +1,5 @@
+# macOS (Apple Silicon) environment, created by `make setup-mac` in ./.venv
+PySide6-Essentials
+mlx-whisper
+numpy
+pytest

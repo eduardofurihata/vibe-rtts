@@ -8,7 +8,7 @@ from PySide6.QtCore import QObject, Signal, QProcess, QTimer, QProcessEnvironmen
 from vibe_rtts.config import (
     PYTHON_PATH, DAEMON_SCRIPT, SOCKET_PATH,
     DAEMON_MODEL, DAEMON_DEVICE, DAEMON_COMPUTE_TYPE,
-    get_nvidia_ld_path,
+    IS_MACOS, get_nvidia_ld_path,
 )
 from vibe_rtts.proc import StderrTail
 
@@ -27,7 +27,7 @@ class DaemonManager(QObject):
         super().__init__(parent)
         self._process = None
         self._adopted = False  # True if we connected to an externally-started daemon
-        self.device = None     # Device the running model is on ("cuda"/"cpu"/None)
+        self.device = None     # Device the running model is on ("cuda"/"mps"/"cpu"/None)
         self._stopping = False  # True while we kill the daemon on purpose
         self._stderr = None     # Last stderr lines, to report why the daemon died
 
@@ -54,7 +54,7 @@ class DaemonManager(QObject):
                     "Stop it and start the engine again."
                 )
                 return
-            self.device = device if device in ("cuda", "cpu") else None
+            self.device = device if device in ("cuda", "mps", "cpu") else None
             self._adopted = True
             self._health_timer.start()
             self.engine_ready.emit()
@@ -76,9 +76,9 @@ class DaemonManager(QObject):
             "--exit-with-parent",
         ])
 
-        # Set environment with NVIDIA libs
+        # Set environment with NVIDIA libs (Linux only: macOS runs on Metal)
         env = QProcessEnvironment.systemEnvironment()
-        nvidia_path = get_nvidia_ld_path()
+        nvidia_path = "" if IS_MACOS else get_nvidia_ld_path()
         existing = env.value("LD_LIBRARY_PATH", "")
         if nvidia_path:
             env.insert("LD_LIBRARY_PATH",

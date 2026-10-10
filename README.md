@@ -1,6 +1,6 @@
 # Vibe RTTS
 
-System tray voice-to-text app for Linux. Records audio, transcribes with
+System tray voice-to-text app for Linux and macOS. Records audio, transcribes with
 [faster-whisper](https://github.com/SYSTRAN/faster-whisper), and copies
 the result to your clipboard.
 
@@ -52,6 +52,50 @@ make uninstall
 VIBE_RTTS_AUTOSTART_ENGINE=0 vibe-rtts
 ```
 
+## macOS
+
+The same app runs on Apple Silicon Macs, with the platform pieces swapped:
+
+| | Linux | macOS |
+|---|---|---|
+| Toggle recording | Ctrl+Alt+Space / Numpad − | **⌃ ,** (Control + comma) |
+| Paste last transcription | Numpad + | **⌃ .** (Control + period), or just ⌘V |
+| Engine | faster-whisper on CUDA, `large-v3` | mlx-whisper on the Apple GPU, `whisper-large-v3-turbo` |
+| Audio | PulseAudio/PipeWire | AVFoundation (default input) |
+| Clipboard | `wl-copy` | NSPasteboard (Qt) |
+
+**Auto-paste:** when you stop a recording with the cursor in a text field, the
+text is pasted right there. It always lands on the clipboard too, so if the focus
+was elsewhere, ⌃. or ⌘V paste it later. Switch it off with "Auto-paste into text
+fields" in the tray menu (remembered across restarts).
+
+⌃, and ⌃. are free in macOS, in the common apps and in the terminal; the
+🎤/F5 key keeps opening the system dictation. The shortcuts are registered with
+Carbon's `RegisterEventHotKey`, which needs no special permission.
+
+```bash
+make setup-mac      # brew ffmpeg + ./.venv with PySide6 and mlx-whisper
+make install-mac    # ~/Applications/Vibe RTTS.app, opened now and at every login
+make uninstall-mac  # removes the app and the login agent
+make run            # or run it from the terminal instead
+```
+
+The app lives in the menu bar only (no Dock icon). Opening "Vibe RTTS" from
+Spotlight or Finder starts it — or, if it is already running, shows a notification
+saying so. It points at this repo, so a `git pull` updates it without reinstalling.
+Logs: `~/Library/Logs/vibe-rtts.log`. The first start downloads the model (~1.6 GB).
+
+Under the hood launchd runs the app, and the bundle is only a button that starts
+it: macOS 27 hides the menu bar icon of a process owned by a new, unsigned
+bundle, while the same process started by launchd shows it.
+
+macOS asks for two permissions. They go to the Python process the app runs in
+(listed as `python3.12`), or to your terminal when you use `make run`:
+
+- **Microphone** — asked on the first recording.
+- **Accessibility** — only for ⌃. (posting ⌘V into the focused app). Without it,
+  the tray tells you where to enable it, and ⌘V keeps working.
+
 ## Project Structure
 
 ```
@@ -62,6 +106,8 @@ vibe_rtts/
   recorder.py        # Audio recording via ffmpeg/PulseAudio
   transcriber.py     # Sends audio to daemon, receives text
   shortcut.py        # Global hotkey via KDE kglobalaccel (DBus)
+  shortcut_macos.py  # Global hotkey via Carbon RegisterEventHotKey (macOS)
+  paste_macos.py     # ⌘V via CoreGraphics + Accessibility check (macOS)
   history.py         # SQLite storage for transcriptions
   history_window.py  # Qt history browser window
   config.py          # Paths, constants, configuration
@@ -80,4 +126,4 @@ scripts/
 | LOADING | Grey mic | Starting daemon, loading model |
 | READY | Green mic | Ready to record |
 | RECORDING | Red mic (pulsing) | Recording audio |
-| TRANSCRIBING | Green mic | Processing transcription |
+| TRANSCRIBING | Amber mic | Processing transcription; back to green when the text is on the clipboard |

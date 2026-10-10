@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QTimer
 
 from vibe_rtts.history import HistoryStore
-from vibe_rtts.proc import run_detached
+from vibe_rtts.proc import copy_to_clipboard
 
 
 class HistoryItemWidget(QWidget):
@@ -42,7 +42,7 @@ class HistoryItemWidget(QWidget):
         layout.addWidget(copy_btn)
 
     def _on_copy(self):
-        run_detached("wl-copy", [self._text], "HISTORY")
+        copy_to_clipboard(self._text, "HISTORY")
         sender = self.sender()
         sender.setText("Copied!")
         QTimer.singleShot(1500, lambda: sender.setText("Copy"))

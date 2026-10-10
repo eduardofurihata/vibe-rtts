@@ -2,7 +2,7 @@ import os
 
 from PySide6.QtCore import QObject, Signal, QProcess, QTimer
 
-from vibe_rtts.config import RAW_FILE, WAV_FILE
+from vibe_rtts.config import AUDIO_INPUT, RAW_FILE, WAV_FILE
 from vibe_rtts.proc import StderrTail
 
 _FFMPEG = "ffmpeg"
@@ -50,7 +50,7 @@ class RecordingEngine(QObject):
         self._process.setProgram(_FFMPEG)
         self._process.setArguments([
             "-y", *_FFMPEG_QUIET,
-            "-f", "pulse", "-i", "default",
+            *AUDIO_INPUT,
             "-ac", "1", "-ar", "16000",
             "-f", "s16le",
             str(RAW_FILE),
