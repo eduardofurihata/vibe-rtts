@@ -49,6 +49,7 @@ class ShortcutHandler(QObject):
     """
 
     shortcut_activated = Signal()
+    stop_copy_activated = Signal()  # macOS contract; no key is bound to it here
     paste_activated = Signal()
 
     def __init__(self, parent=None):

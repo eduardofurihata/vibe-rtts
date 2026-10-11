@@ -3,7 +3,9 @@ import time
 
 from PySide6.QtCore import QObject, Signal
 
-from vibe_rtts.config import SHORTCUT_TOGGLE_DISPLAY, SHORTCUT_PASTE_DISPLAY
+from vibe_rtts.config import (
+    SHORTCUT_TOGGLE_DISPLAY, SHORTCUT_STOP_COPY_DISPLAY, SHORTCUT_PASTE_DISPLAY,
+)
 
 _CARBON = "/System/Library/Frameworks/Carbon.framework/Carbon"
 
@@ -16,6 +18,7 @@ def _fourcc(code: bytes) -> int:
 _CONTROL_KEY = 0x1000            # controlKey modifier
 _KVK_ANSI_COMMA = 0x2B           # physical key, so the keyboard layout does not matter
 _KVK_ANSI_PERIOD = 0x2F
+_KVK_ANSI_SLASH = 0x2C
 _EVENT_CLASS_KEYBOARD = _fourcc(b"keyb")
 _EVENT_HOTKEY_PRESSED = 5
 _PARAM_DIRECT_OBJECT = _fourcc(b"----")
@@ -23,11 +26,13 @@ _TYPE_EVENT_HOTKEY_ID = _fourcc(b"hkid")
 _SIGNATURE = _fourcc(b"vrtt")
 
 _TOGGLE_ID = 1
-_PASTE_ID = 2
+_STOP_COPY_ID = 2
+_PASTE_ID = 3
 
 _HOTKEYS = [
     (_TOGGLE_ID, _KVK_ANSI_COMMA, _CONTROL_KEY, SHORTCUT_TOGGLE_DISPLAY),
-    (_PASTE_ID, _KVK_ANSI_PERIOD, _CONTROL_KEY, SHORTCUT_PASTE_DISPLAY),
+    (_STOP_COPY_ID, _KVK_ANSI_PERIOD, _CONTROL_KEY, SHORTCUT_STOP_COPY_DISPLAY),
+    (_PASTE_ID, _KVK_ANSI_SLASH, _CONTROL_KEY, SHORTCUT_PASTE_DISPLAY),
 ]
 
 
@@ -69,8 +74,8 @@ def _load_carbon():
 class MacShortcutHandler(QObject):
     """macOS global shortcuts via Carbon's RegisterEventHotKey.
 
-    Same contract as the KDE ShortcutHandler (shortcut_activated, paste_activated,
-    cleanup), so the tray does not care which one it got. RegisterEventHotKey is
+    Same contract as the KDE ShortcutHandler (shortcut_activated,
+    stop_copy_activated, paste_activated, cleanup), so the tray does not care which one it got. RegisterEventHotKey is
     the one global-hotkey API that needs no Accessibility or Input Monitoring
     permission, and the system swallows the keys, so they never reach the
     focused app. Events arrive on the main run loop — the one Qt drives — so the
@@ -78,6 +83,7 @@ class MacShortcutHandler(QObject):
     """
 
     shortcut_activated = Signal()
+    stop_copy_activated = Signal()  # stop recording, copy but never paste
     paste_activated = Signal()
 
     def __init__(self, parent=None):
@@ -86,6 +92,7 @@ class MacShortcutHandler(QObject):
         self._hotkey_refs = []
         self._handler_ref = None
         self._last_toggle = 0.0
+        self._last_stop_copy = 0.0
         self._last_paste = 0.0
         # Held on the instance: if ctypes' callback object were collected, Carbon
         # would call into freed memory on the next key press.
@@ -135,6 +142,11 @@ class MacShortcutHandler(QObject):
                 self._last_toggle = now
                 print("[SHORTCUT] toggle fired", flush=True)
                 self.shortcut_activated.emit()
+        elif hotkey_id == _STOP_COPY_ID:
+            if now - self._last_stop_copy > 0.3:
+                self._last_stop_copy = now
+                print("[SHORTCUT] stop-copy fired", flush=True)
+                self.stop_copy_activated.emit()
         elif hotkey_id == _PASTE_ID:
             if now - self._last_paste > 0.5:
                 self._last_paste = now

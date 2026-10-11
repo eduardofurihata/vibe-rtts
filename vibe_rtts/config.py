@@ -73,13 +73,19 @@ SHORTCUT_PASTE_KEYS = [
 ]
 SHORTCUT_PASTE_DISPLAY = "Numpad +"
 
-# macOS has no numpad on the MacBook and no kglobalaccel: Control+comma toggles,
-# Control+period pastes. Both are free in the system, the apps and the terminal.
+# Stop recording and copy, without pasting: macOS only.
+SHORTCUT_STOP_COPY_DISPLAY = None
+
+# macOS has no numpad on the MacBook and no kglobalaccel: Control+comma toggles
+# (and pastes on stop), Control+period stops and only copies, Control+slash
+# pastes. All three are free in the system and the common apps; in the terminal
+# ⌃/ is readline's undo (^_), which the hotkey swallows while the app runs.
 if IS_MACOS:
     SHORTCUT_TOGGLE_DISPLAY = "⌃,"
-    SHORTCUT_PASTE_DISPLAY = "⌃."
+    SHORTCUT_STOP_COPY_DISPLAY = "⌃."
+    SHORTCUT_PASTE_DISPLAY = "⌃/"
 
-PASTE_HINT = "⌃. or ⌘V" if IS_MACOS else "Ctrl+Shift+V"
+PASTE_HINT = "⌃/ or ⌘V" if IS_MACOS else "Ctrl+Shift+V"
 
 # macOS: paste the transcription by itself when the cursor is in a text field
 # (it stays on the clipboard either way). Toggle in the tray menu; persisted.

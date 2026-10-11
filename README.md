@@ -58,18 +58,21 @@ The same app runs on Apple Silicon Macs, with the platform pieces swapped:
 
 | | Linux | macOS |
 |---|---|---|
-| Toggle recording | Ctrl+Alt+Space / Numpad − | **⌃ ,** (Control + comma) |
-| Paste last transcription | Numpad + | **⌃ .** (Control + period), or just ⌘V |
+| Toggle recording (stop = copy + auto-paste) | Ctrl+Alt+Space / Numpad − | **⌃ ,** (Control + comma) |
+| Stop recording, copy only (never pastes) | — | **⌃ .** (Control + period) |
+| Paste last transcription | Numpad + | **⌃ /** (Control + slash), or just ⌘V |
 | Engine | faster-whisper on CUDA, `large-v3` | mlx-whisper on the Apple GPU, `whisper-large-v3-turbo` |
 | Audio | PulseAudio/PipeWire | AVFoundation (default input) |
 | Clipboard | `wl-copy` | NSPasteboard (Qt) |
 
-**Auto-paste:** when you stop a recording with the cursor in a text field, the
-text is pasted right there. It always lands on the clipboard too, so if the focus
-was elsewhere, ⌃. or ⌘V paste it later. Switch it off with "Auto-paste into text
+**Auto-paste:** when you stop a recording with ⌃, and the cursor is in a text
+field, the text is pasted right there. It always lands on the clipboard too, so if
+the focus was elsewhere, ⌃/ or ⌘V paste it later. Stop with ⌃. instead when you
+want the text on the clipboard only. Switch it off with "Auto-paste into text
 fields" in the tray menu (remembered across restarts).
 
-⌃, and ⌃. are free in macOS, in the common apps and in the terminal; the
+⌃, ⌃. and ⌃/ are free in macOS and in the common apps. In the terminal ⌃/ is
+readline's undo (^_), which the app takes over while it runs. The
 🎤/F5 key keeps opening the system dictation. The shortcuts are registered with
 Carbon's `RegisterEventHotKey`, which needs no special permission.
 

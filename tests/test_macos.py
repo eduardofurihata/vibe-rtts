@@ -1,4 +1,4 @@
-"""macOS port: config branches, Carbon shortcuts, clipboard and ⌃. paste."""
+"""macOS port: config branches, Carbon shortcuts, clipboard and ⌃/ paste."""
 import os
 import subprocess
 import sys
@@ -30,10 +30,11 @@ class TestConfig:
     def test_captures_with_avfoundation(self):
         assert config.AUDIO_INPUT[:2] == ["-f", "avfoundation"]
 
-    def test_shortcuts_are_control_comma_and_period(self):
+    def test_shortcuts_are_control_comma_period_and_slash(self):
         assert config.SHORTCUT_TOGGLE_DISPLAY == "⌃,"
-        assert config.SHORTCUT_PASTE_DISPLAY == "⌃."
-        assert "⌃." in config.PASTE_HINT
+        assert config.SHORTCUT_STOP_COPY_DISPLAY == "⌃."
+        assert config.SHORTCUT_PASTE_DISPLAY == "⌃/"
+        assert "⌃/" in config.PASTE_HINT
 
 
 class TestMacShortcutHandler:
@@ -44,25 +45,37 @@ class TestMacShortcutHandler:
         yield h
         h.cleanup()
 
-    def test_both_hotkeys_register(self, handler):
+    def test_all_three_hotkeys_register(self, handler):
         assert handler._handler_ref is not None
-        assert len(handler._hotkey_refs) == 2
+        assert len(handler._hotkey_refs) == 3
+
+    def _spies(self, handler):
+        toggle, stop_copy, paste = MagicMock(), MagicMock(), MagicMock()
+        handler.shortcut_activated.connect(toggle)
+        handler.stop_copy_activated.connect(stop_copy)
+        handler.paste_activated.connect(paste)
+        return toggle, stop_copy, paste
 
     def test_toggle_id_emits_toggle_only(self, handler):
-        toggle, paste = MagicMock(), MagicMock()
-        handler.shortcut_activated.connect(toggle)
-        handler.paste_activated.connect(paste)
+        toggle, stop_copy, paste = self._spies(handler)
         handler._dispatch(1)
         toggle.assert_called_once()
+        stop_copy.assert_not_called()
+        paste.assert_not_called()
+
+    def test_stop_copy_id_emits_stop_copy_only(self, handler):
+        toggle, stop_copy, paste = self._spies(handler)
+        handler._dispatch(2)
+        stop_copy.assert_called_once()
+        toggle.assert_not_called()
         paste.assert_not_called()
 
     def test_paste_id_emits_paste_only(self, handler):
-        toggle, paste = MagicMock(), MagicMock()
-        handler.shortcut_activated.connect(toggle)
-        handler.paste_activated.connect(paste)
-        handler._dispatch(2)
+        toggle, stop_copy, paste = self._spies(handler)
+        handler._dispatch(3)
         paste.assert_called_once()
         toggle.assert_not_called()
+        stop_copy.assert_not_called()
 
     def test_repeat_within_debounce_is_ignored(self, handler):
         toggle = MagicMock()
@@ -155,7 +168,7 @@ class TestAutoPaste:
                 patch("vibe_rtts.paste_macos.paste_command_v") as paste:
             message = self._finish(tray)
         paste.assert_not_called()
-        assert "Copied" in message and "⌃." in message
+        assert "Copied" in message and "⌃/" in message
 
     def test_switched_off_never_pastes(self):
         tray = TrayManager()
@@ -187,6 +200,64 @@ class TestAutoPaste:
         with patch("vibe_rtts.paste_macos.wake_focused_app") as wake:
             tray._on_toggle()
         wake.assert_called_once()
+
+
+class TestStopCopy:
+    """⌃. ends the recording like ⌃, does, but only copies — never pastes."""
+
+    def _recording_tray(self):
+        tray = TrayManager()
+        tray.recorder = MagicMock()
+        tray.showMessage = MagicMock()
+        tray._update_state(AppState.RECORDING)
+        return tray
+
+    def _finish(self, tray):
+        tray._on_transcription_done("olá mundo", "pt")
+        pump_until(lambda: tray.showMessage.called, 2000)
+        return tray.showMessage.call_args[0][1]
+
+    def test_stops_the_recording(self):
+        tray = self._recording_tray()
+        tray._on_stop_copy()
+        assert tray._state == AppState.TRANSCRIBING
+        tray.recorder.stop_recording.assert_called_once()
+
+    def test_never_pastes_even_in_a_text_field(self):
+        tray = self._recording_tray()
+        tray._on_stop_copy()
+        with patch("vibe_rtts.paste_macos.is_trusted", return_value=True), \
+                patch("vibe_rtts.paste_macos.focused_text_input", return_value=True) as field, \
+                patch("vibe_rtts.paste_macos.paste_command_v") as paste:
+            message = self._finish(tray)
+            pump_until(lambda: False, 300)
+        paste.assert_not_called()
+        field.assert_not_called()
+        assert "Copied" in message and "⌃/" in message
+
+    def test_next_toggle_stop_pastes_again(self):
+        tray = self._recording_tray()
+        tray._on_stop_copy()
+        self._finish(tray)
+        tray.showMessage.reset_mock()
+        tray._update_state(AppState.RECORDING)
+        tray._on_toggle()
+        with patch("vibe_rtts.paste_macos.is_trusted", return_value=True), \
+                patch("vibe_rtts.paste_macos.focused_text_input", return_value=True), \
+                patch("vibe_rtts.paste_macos.paste_command_v") as paste:
+            message = self._finish(tray)
+        paste.assert_called_once()
+        assert "Pasted" in message
+
+    @pytest.mark.parametrize("state", [AppState.INACTIVE, AppState.READY,
+                                       AppState.LOADING, AppState.TRANSCRIBING])
+    def test_does_nothing_unless_recording(self, state):
+        tray = TrayManager()
+        tray.recorder = MagicMock()
+        tray._update_state(state)
+        tray._on_stop_copy()
+        assert tray._state == state
+        tray.recorder.stop_recording.assert_not_called()
 
 
 class TestFocusDetectionSmoke:

@@ -90,6 +90,8 @@ class TrayManager(QSystemTrayIcon):
         self.history_window = None
         self._transcribe_worker = None
         self._asked_accessibility = False  # macOS: open the permission dialog once
+        # False when the recording was stopped with ⌃. (copy only, never paste).
+        self._paste_after_transcription = True
 
     def init_components(self, daemon_manager, recorder, transcriber_cls,
                         shortcut_handler, history_store, history_window):
@@ -108,9 +110,10 @@ class TrayManager(QSystemTrayIcon):
         self.recorder.recording_stopped.connect(self._on_recording_stopped)
         self.recorder.recording_failed.connect(self._on_recording_failed)
         self.shortcut_handler.shortcut_activated.connect(self._on_toggle)
+        self.shortcut_handler.stop_copy_activated.connect(self._on_stop_copy)
         self.shortcut_handler.paste_activated.connect(self._on_paste)
 
-    # --- Paste (Numpad + on Linux, ⌃. on macOS) ---
+    # --- Paste (Numpad + on Linux, ⌃/ on macOS) ---
     @Slot()
     def _on_paste(self):
         """Paste the clipboard into the focused window."""
@@ -160,8 +163,8 @@ class TrayManager(QSystemTrayIcon):
         """Paste the fresh transcription if the cursor is in a text field.
 
         It is on the clipboard either way, so when the focus is elsewhere nothing
-        is lost: ⌃. or ⌘V paste it later. Never prompts for Accessibility here —
-        that dialog belongs to an explicit ⌃., not to the end of a dictation.
+        is lost: ⌃/ or ⌘V paste it later. Never prompts for Accessibility here —
+        that dialog belongs to an explicit ⌃/, not to the end of a dictation.
         """
         from vibe_rtts import paste_macos
         trusted = paste_macos.is_trusted()
@@ -254,14 +257,27 @@ class TrayManager(QSystemTrayIcon):
             self._wake_focused_app()
 
         elif self._state == AppState.RECORDING:
-            # Leave RECORDING now, not when the wav is ready: from the user's point
-            # of view the capture ended the moment they hit the shortcut, and the
-            # conversion that follows takes a few hundred milliseconds.
-            self._update_state(AppState.TRANSCRIBING)
-            self.recorder.stop_recording()
-            # _on_recording_stopped / _on_recording_failed take it from here
+            self._stop_recording(paste=True)
 
         # Ignore if LOADING or TRANSCRIBING (debounce)
+
+    # --- Stop and copy only (⌃. on macOS) ---
+    @Slot()
+    def _on_stop_copy(self):
+        """End the recording like the toggle does, but leave the text on the
+        clipboard only — no auto-paste. Does nothing unless we are recording."""
+        print(f"[TRAY] Stop-copy pressed! Current state: {self._state.name}", flush=True)
+        if self._state == AppState.RECORDING:
+            self._stop_recording(paste=False)
+
+    def _stop_recording(self, paste: bool):
+        self._paste_after_transcription = paste
+        # Leave RECORDING now, not when the wav is ready: from the user's point
+        # of view the capture ended the moment they hit the shortcut, and the
+        # conversion that follows takes a few hundred milliseconds.
+        self._update_state(AppState.TRANSCRIBING)
+        self.recorder.stop_recording()
+        # _on_recording_stopped / _on_recording_failed take it from here
 
     # --- Engine events ---
     @Slot()
@@ -316,7 +332,9 @@ class TrayManager(QSystemTrayIcon):
         if self.history_store:
             self.history_store.save(text, language)
         self._update_state(AppState.READY)
-        if self._auto_paste:
+        paste = self._paste_after_transcription
+        self._paste_after_transcription = True
+        if self._auto_paste and paste:
             # The delay lets the clipboard settle and the ⌃, keys come up; the
             # check-and-paste then decides which notification to show.
             QTimer.singleShot(150, self._auto_paste_if_text_field)

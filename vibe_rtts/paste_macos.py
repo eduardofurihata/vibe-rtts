@@ -179,7 +179,7 @@ def focused_text_input() -> bool:
     Used to decide if a finished transcription can be pasted on its own: with the
     focus on the Finder, the desktop or a list, a ⌘V would do nothing useful — or
     something unexpected. Any error counts as "no": the text stays on the
-    clipboard and ⌃. / ⌘V still paste it by hand.
+    clipboard and ⌃/ / ⌘V still paste it by hand.
     """
     try:
         pid = _frontmost_pid()
@@ -216,7 +216,7 @@ def paste_command_v():
     """Post ⌘V down/up.
 
     The flags are set explicitly, from a private event source: the user is
-    usually still holding Control from ⌃. when this runs, and inheriting the
+    usually still holding Control from ⌃/ or ⌃, when this runs, and inheriting the
     live modifier state would turn it into ⌃⌘V.
     """
     app, cf = _libs()
